@@ -1,3 +1,6 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+@import 'pdfjs-dist/web/pdf_viewer.css';
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -8,25 +11,112 @@
   box-sizing: border-box;
 }
 
-html, body, #root {
+html,
+body,
+#root {
   height: 100%;
   overflow: hidden;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
 }
 
+/* ── Selection highlight ── */
+.textLayer ::selection {
+  background: rgb(153, 0, 255);
+  color: #ffffff;
+}
+
+::selection {
+  background: rgb(153, 0, 255);
+  color: #ffffff;
+}
+
+/* ── Custom scrollbar ── */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #1e293b;
+  background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #334155;
-  border-radius: 4px;
+  background: rgba(139, 92, 246, 0.25);
+  border-radius: 999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #475569;
+  background: rgba(139, 92, 246, 0.45);
+}
+
+/* ── Glassmorphism utilities ── */
+@layer components {
+  .glass-panel {
+    background: rgba(46, 16, 101, 0.55);
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3),
+      inset 0 1px 1px rgba(255, 255, 255, 0.05);
+  }
+
+  .glass-header {
+    background: rgba(76, 29, 149, 0.5);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  .glass-input {
+    background: rgba(91, 33, 182, 0.25);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    transition: all 0.25s ease;
+  }
+
+  .glass-input:focus {
+    border-color: rgba(139, 92, 246, 0.5);
+    box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.15),
+      inset 0 1px 1px rgba(255, 255, 255, 0.05);
+  }
+
+  .glass-button {
+    background: rgba(124, 58, 237, 0.6);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 2px 8px rgba(124, 58, 237, 0.25);
+    transition: all 0.2s ease;
+  }
+
+  .glass-button:hover {
+    background: rgba(124, 58, 237, 0.8);
+    box-shadow: 0 4px 16px rgba(124, 58, 237, 0.35);
+    transform: translateY(-1px);
+  }
+
+  .glass-button:active {
+    transform: translateY(0) scale(0.97);
+  }
+
+  .glass-button:disabled {
+    background: rgba(91, 33, 182, 0.2);
+    box-shadow: none;
+    transform: none;
+    border-color: rgba(255, 255, 255, 0.04);
+  }
+
+  /* Panel animations */
+  .panel-collapse {
+    width: 0;
+    opacity: 0;
+    padding: 0;
+    overflow: hidden;
+  }
+
+  .panel-expand {
+    width: 250px;
+    opacity: 1;
+  }
 }

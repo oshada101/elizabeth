@@ -102,23 +102,43 @@ ipcMain.handle('read-file', async (_event, filePath: string) => {
 })
 
 ipcMain.handle('get-sessions', () => {
-  if (!db) return []
-  const result = db.exec('SELECT * FROM sessions ORDER BY updated_at DESC')
-  if (result.length === 0) return []
-  return result[0].values.map(row => ({
-    id: row[0],
-    pdf_path: row[1],
-    created_at: row[2],
-    updated_at: row[3]
-  }))
+  if (!db) {
+    log.error('Database not initialized in getSessions')
+    return []
+  }
+  try {
+    const result = db.exec('SELECT * FROM sessions ORDER BY updated_at DESC')
+    if (result.length === 0) return []
+    return result[0].values.map(row => ({
+      id: row[0],
+      pdf_path: row[1],
+      created_at: row[2],
+      updated_at: row[3]
+    }))
+  } catch (error) {
+    log.error('Error getting sessions:', error)
+    return []
+  }
 })
 
 ipcMain.handle('create-session', (_event, pdfPath: string) => {
-  if (!db) return null
-  db.run('INSERT INTO sessions (pdf_path) VALUES (?)', [pdfPath])
-  saveDatabase()
-  const result = db.exec('SELECT last_insert_rowid()')
-  return result[0].values[0][0]
+  if (!db) {
+    log.error('Database not initialized')
+    return null
+  }
+  try {
+    db.run('INSERT INTO sessions (pdf_path) VALUES (?)', [pdfPath])
+    saveDatabase()
+    const result = db.exec('SELECT last_insert_rowid()')
+    if (result.length === 0 || result[0].values.length === 0) {
+      log.error('Failed to get last insert rowid')
+      return null
+    }
+    return result[0].values[0][0]
+  } catch (error) {
+    log.error('Error creating session:', error)
+    return null
+  }
 })
 
 ipcMain.handle('update-session', (_event, sessionId: number, pdfPath: string) => {

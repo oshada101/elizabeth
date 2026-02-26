@@ -38,10 +38,10 @@ function ChatPanel({ sessionId, selectedText, onClearSelection }: ChatPanelProps
     if (!inputValue.trim() || !sessionId) return
 
     const userMessage = inputValue.trim()
-    const fullMessage = selectedText 
+    const fullMessage = selectedText
       ? `[[TEXT:${selectedText}]]\n${userMessage}`
       : userMessage
-    
+
     setInputValue('')
     onClearSelection()
 
@@ -88,72 +88,75 @@ function ChatPanel({ sessionId, selectedText, onClearSelection }: ChatPanelProps
   }
 
   return (
-    <div className="flex flex-col h-full bg-primary-950">
-      <div className="flex items-center justify-between px-4 py-3 bg-primary-900 border-b border-primary-800">
-        <h2 className="text-lg font-semibold text-primary-400">Chat Assistant</h2>
+    <div className="flex flex-col h-full bg-transparent">
+      {/* ── Glass Header ── */}
+      <div className="glass-header flex items-center justify-between px-5 py-3">
+        <h2 className="text-base font-semibold text-primary-200 tracking-tight">Chat Assistant</h2>
         <button
           onClick={handleClearChat}
-          className="p-2 text-primary-300 hover:text-red-400 hover:bg-primary-800 rounded-lg transition-colors"
+          className="p-2 rounded-xl bg-white/5 border border-white/8 text-primary-300 hover:text-red-400 hover:bg-red-500/10 hover:border-red-500/20 hover:scale-105 active:scale-95 transition-all duration-200"
           title="Clear chat"
         >
-          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
             <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clipRule="evenodd" />
           </svg>
         </button>
       </div>
 
+      {/* ── Messages Area ── */}
       <div className="flex-1 overflow-auto p-4 space-y-4">
         {messages.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full text-primary-400">
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-16 w-16 mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-            </svg>
-            <p className="text-lg font-medium">Start a conversation</p>
-            <p className="text-sm">Ask me anything about your PDF</p>
+          <div className="flex flex-col items-center justify-center h-full text-primary-400 animate-fade-in">
+            <div className="p-4 rounded-2xl bg-primary-800/15 mb-4">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-14 w-14" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+              </svg>
+            </div>
+            <p className="text-base font-medium text-primary-200">Start a conversation</p>
+            <p className="text-sm text-primary-400/70 mt-1">Ask me anything about your PDF</p>
           </div>
         ) : (
           messages.map((msg) => {
             const { mainText, attachedText } = parseMessage(msg.content)
             return (
-            <div
-              key={msg.id}
-              className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
-            >
-              <div className="max-w-[80%]">
-                {attachedText && (
-                  <div className={`mb-1 px-3 py-1.5 rounded-lg text-xs ${
-                    msg.role === 'user' 
-                      ? 'bg-primary-600/30 text-primary-200' 
-                      : 'bg-primary-800/50 text-primary-300'
-                  }`}>
-                    <span className="font-medium">📎 Attached: </span>
-                    {attachedText.length > 50 ? attachedText.substring(0, 50) + '...' : attachedText}
+              <div
+                key={msg.id}
+                className={`flex animate-fade-in ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+              >
+                <div className="max-w-[80%]">
+                  {attachedText && (
+                    <div className={`mb-1.5 px-3 py-1.5 rounded-xl text-xs backdrop-blur-sm ${msg.role === 'user'
+                        ? 'bg-primary-500/15 text-primary-200 border border-primary-500/15'
+                        : 'bg-white/5 text-primary-300 border border-white/8'
+                      }`}>
+                      <span className="font-medium">📎 Attached: </span>
+                      {attachedText.length > 50 ? attachedText.substring(0, 50) + '...' : attachedText}
+                    </div>
+                  )}
+                  <div
+                    className={`rounded-2xl px-4 py-2.5 shadow-glass-sm ${msg.role === 'user'
+                        ? 'bg-primary-600/70 backdrop-blur-sm text-white rounded-br-lg border border-primary-500/20'
+                        : 'bg-white/8 backdrop-blur-sm text-primary-100 rounded-bl-lg border border-white/8'
+                      }`}
+                  >
+                    <p className="whitespace-pre-wrap text-sm leading-relaxed">{mainText}</p>
+                    <p className={`text-[11px] mt-1.5 ${msg.role === 'user' ? 'text-primary-200/60' : 'text-primary-400/60'}`}>
+                      {formatTime(msg.timestamp)}
+                    </p>
                   </div>
-                )}
-                <div
-                  className={`rounded-2xl px-4 py-2 ${
-                    msg.role === 'user'
-                      ? 'bg-primary-600 text-white rounded-br-md'
-                      : 'bg-primary-800 text-primary-100 rounded-bl-md'
-                  }`}
-                >
-                  <p className="whitespace-pre-wrap">{mainText}</p>
-                  <p className={`text-xs mt-1 ${msg.role === 'user' ? 'text-primary-200' : 'text-primary-400'}`}>
-                    {formatTime(msg.timestamp)}
-                  </p>
                 </div>
               </div>
-            </div>
-          )})
+            )
+          })
         )}
-        
+
         {isTyping && (
-          <div className="flex justify-start">
-            <div className="bg-primary-800 rounded-2xl rounded-bl-md px-4 py-3">
-              <div className="flex space-x-1">
-                <div className="w-2 h-2 bg-primary-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
-                <div className="w-2 h-2 bg-primary-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
-                <div className="w-2 h-2 bg-primary-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
+          <div className="flex justify-start animate-fade-in">
+            <div className="bg-white/8 backdrop-blur-sm rounded-2xl rounded-bl-lg px-4 py-3 border border-white/8 shadow-glass-sm">
+              <div className="flex space-x-1.5">
+                <div className="w-2 h-2 bg-primary-400/70 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
+                <div className="w-2 h-2 bg-primary-400/70 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
+                <div className="w-2 h-2 bg-primary-400/70 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
               </div>
             </div>
           </div>
@@ -161,23 +164,24 @@ function ChatPanel({ sessionId, selectedText, onClearSelection }: ChatPanelProps
         <div ref={messagesEndRef} />
       </div>
 
+      {/* ── Selected Text Badge ── */}
       {selectedText && (
-        <div className="px-4 py-2 bg-primary-900/50 border-t border-primary-800">
+        <div className="px-4 py-2.5 bg-primary-800/20 backdrop-blur-sm border-t border-white/5">
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-2 flex-1 min-w-0">
-              <div className="flex items-center gap-1.5 px-2 py-1 bg-primary-600/20 rounded-md border border-primary-500/30">
+              <div className="flex items-center gap-1.5 px-2.5 py-1 bg-primary-500/12 rounded-lg border border-primary-500/20">
                 <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5 text-primary-400" viewBox="0 0 20 20" fill="currentColor">
                   <path d="M9 4.804A7.968 7.968 0 005.5 4c-1.255 0-2.443.29-3.5.804v10A7.969 7.969 0 015.5 14c1.669 0 3.218.51 4.5 1.385A7.962 7.962 0 0114.5 14c1.255 0 2.443.29 3.5.804v-10A7.968 7.968 0 0014.5 4c-1.255 0-2.443.29-3.5.804V12a1 1 0 11-2 0V4.804z" />
                 </svg>
-                <span className="text-xs text-primary-300 font-medium">Text selected</span>
+                <span className="text-xs text-primary-300/80 font-medium">Selected</span>
               </div>
-              <span className="text-sm text-primary-300 truncate">
+              <span className="text-sm text-primary-300/70 truncate">
                 {selectedText.length > 40 ? selectedText.substring(0, 40) + '...' : selectedText}
               </span>
             </div>
             <button
               onClick={onClearSelection}
-              className="p-1.5 text-primary-300 hover:text-red-400 hover:bg-primary-800 rounded-lg transition-colors flex-shrink-0"
+              className="p-1.5 text-primary-300 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-all duration-200 hover:scale-105 active:scale-95 flex-shrink-0"
               title="Deselect"
             >
               <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
@@ -188,22 +192,23 @@ function ChatPanel({ sessionId, selectedText, onClearSelection }: ChatPanelProps
         </div>
       )}
 
-      <div className="p-4 bg-primary-900 border-t border-primary-800">
-        <div className="flex gap-2">
+      {/* ── Glass Input Area ── */}
+      <div className="p-4 glass-header">
+        <div className="flex gap-2.5">
           <input
             type="text"
             value={inputValue}
             onChange={(e) => setInputValue(e.target.value)}
             onKeyPress={handleKeyPress}
             placeholder="Type your message..."
-            className="flex-1 bg-primary-800 text-white placeholder-primary-400 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-opacity-50"
+            className="flex-1 glass-input text-white text-sm placeholder-primary-400/50 rounded-2xl px-4 py-3 focus:outline-none"
           />
           <button
             onClick={handleSendMessage}
             disabled={!inputValue.trim()}
-            className="p-3 bg-primary-600 hover:bg-primary-500 disabled:bg-primary-800 disabled:cursor-not-allowed text-white rounded-xl transition-colors"
+            className="glass-button p-3 text-white rounded-2xl disabled:opacity-30"
           >
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" viewBox="0 0 20 20" fill="currentColor">
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
               <path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z" />
             </svg>
           </button>
