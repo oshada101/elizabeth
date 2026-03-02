@@ -29,6 +29,10 @@ logs/
 
 # Database
 *.db
+*.db-shm
+*.db-wal
 *.sqlite
+setup.sh
 
 AGENTS.md
+DOCUMENTATION.md

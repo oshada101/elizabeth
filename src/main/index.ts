@@ -3,6 +3,8 @@ import { join } from 'path'
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs'
 import log from 'electron-log'
 import initSqlJs, { Database } from 'sql.js'
+import { invokeAgent } from './agent'
+import * as keyManager from './keyManager'
 
 log.initialize()
 log.info('App starting...')
@@ -12,10 +14,11 @@ let db: Database | null = null
 
 const userDataPath = app.getPath('userData')
 const dbPath = join(userDataPath, 'app.db')
+const keysMetadataPath = join(userDataPath, 'api-keys.json')
 
 async function initDatabase(): Promise<void> {
   const SQL = await initSqlJs()
-  
+
   if (existsSync(dbPath)) {
     const buffer = readFileSync(dbPath)
     db = new SQL.Database(buffer)
@@ -61,6 +64,9 @@ function createWindow(): void {
     minWidth: 1000,
     minHeight: 700,
     backgroundColor: '#2e1065',
+    frame: false,
+    titleBarStyle: 'hidden',     // or 'hiddenInset'
+    autoHideMenuBar: true,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -175,15 +181,63 @@ ipcMain.handle('clear-messages', (_event, sessionId: number) => {
   saveDatabase()
 })
 
+ipcMain.handle('ask', async (_, message: string) => {
+  const response = await invokeAgent({
+    messages: [{ role: 'user', content: message }],
+  }, {
+    configurable: {
+      thread_id: "thread_1",
+    },
+  })
+  return response
+})
+
+ipcMain.handle('api-keys:save', async (_event, data) => {
+  return keyManager.saveApiKey(data)
+})
+
+ipcMain.handle('api-keys:list', async () => {
+  return keyManager.getApiKeysMetadata()
+})
+
+ipcMain.handle('api-keys:delete', async (_event, id) => {
+  return keyManager.deleteApiKey(id)
+})
+
+ipcMain.handle('api-keys:set-default', async (_event, id) => {
+  return keyManager.setDefaultApiKey(id)
+})
+
+ipcMain.handle('api-keys:update', async (_event, id: string, data: { account?: string, provider?: string, label?: string, isDefault?: boolean, models?: string[], apiKey?: string, baseUrl?: string }) => {
+  return keyManager.updateApiKey(id, data)
+})
+
+ipcMain.handle('window-minimize', () => {
+  mainWindow?.minimize()
+})
+
+ipcMain.handle('window-maximize', () => {
+  if (mainWindow?.isMaximized()) {
+    mainWindow.unmaximize()
+  } else {
+    mainWindow?.maximize()
+  }
+})
+
+ipcMain.handle('window-close', () => {
+  mainWindow?.close()
+})
+
 app.whenReady().then(async () => {
   await initDatabase()
   createWindow()
 })
 
-app.on('window-all-closed', () => {
+app.on('window-all-closed', async () => {
   if (process.platform !== 'darwin') {
     app.quit()
   }
+
 })
 
 app.on('activate', () => {
