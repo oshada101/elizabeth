@@ -1,32 +1,17 @@
 import { app, BrowserWindow, ipcMain, dialog } from 'electron'
 import { join } from 'path'
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs'
+import { existsSync } from 'fs'
 import log from 'electron-log'
-import initSqlJs, { Database } from 'sql.js'
-import { invokeAgent } from './agent'
+import { invokeAgent, db as appDb } from './agent'
 import * as keyManager from './keyManager'
 
 log.initialize()
 log.info('App starting...')
 
 let mainWindow: BrowserWindow | null = null
-let db: Database | null = null
 
-const userDataPath = app.getPath('userData')
-const dbPath = join(userDataPath, 'app.db')
-const keysMetadataPath = join(userDataPath, 'api-keys.json')
-
-async function initDatabase(): Promise<void> {
-  const SQL = await initSqlJs()
-
-  if (existsSync(dbPath)) {
-    const buffer = readFileSync(dbPath)
-    db = new SQL.Database(buffer)
-  } else {
-    db = new SQL.Database()
-  }
-
-  db.run(`
+function initDatabase(): void {
+  appDb.exec(`
     CREATE TABLE IF NOT EXISTS sessions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       pdf_path TEXT,
@@ -35,7 +20,7 @@ async function initDatabase(): Promise<void> {
     )
   `)
 
-  db.run(`
+  appDb.exec(`
     CREATE TABLE IF NOT EXISTS messages (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       session_id INTEGER,
@@ -45,16 +30,6 @@ async function initDatabase(): Promise<void> {
       FOREIGN KEY (session_id) REFERENCES sessions(id)
     )
   `)
-
-  saveDatabase()
-}
-
-function saveDatabase(): void {
-  if (db) {
-    const data = db.export()
-    const buffer = Buffer.from(data)
-    writeFileSync(dbPath, buffer)
-  }
 }
 
 function createWindow(): void {
@@ -65,7 +40,7 @@ function createWindow(): void {
     minHeight: 700,
     backgroundColor: '#2e1065',
     frame: false,
-    titleBarStyle: 'hidden',     // or 'hiddenInset'
+    titleBarStyle: 'hidden',
     autoHideMenuBar: true,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -99,6 +74,7 @@ ipcMain.handle('open-file-dialog', async () => {
 
 ipcMain.handle('read-file', async (_event, filePath: string) => {
   try {
+    const { readFileSync } = await import('fs')
     const buffer = readFileSync(filePath)
     return buffer
   } catch (error) {
@@ -108,19 +84,9 @@ ipcMain.handle('read-file', async (_event, filePath: string) => {
 })
 
 ipcMain.handle('get-sessions', () => {
-  if (!db) {
-    log.error('Database not initialized in getSessions')
-    return []
-  }
   try {
-    const result = db.exec('SELECT * FROM sessions ORDER BY updated_at DESC')
-    if (result.length === 0) return []
-    return result[0].values.map(row => ({
-      id: row[0],
-      pdf_path: row[1],
-      created_at: row[2],
-      updated_at: row[3]
-    }))
+    const stmt = appDb.prepare('SELECT * FROM sessions ORDER BY updated_at DESC')
+    return stmt.all()
   } catch (error) {
     log.error('Error getting sessions:', error)
     return []
@@ -128,19 +94,10 @@ ipcMain.handle('get-sessions', () => {
 })
 
 ipcMain.handle('create-session', (_event, pdfPath: string) => {
-  if (!db) {
-    log.error('Database not initialized')
-    return null
-  }
   try {
-    db.run('INSERT INTO sessions (pdf_path) VALUES (?)', [pdfPath])
-    saveDatabase()
-    const result = db.exec('SELECT last_insert_rowid()')
-    if (result.length === 0 || result[0].values.length === 0) {
-      log.error('Failed to get last insert rowid')
-      return null
-    }
-    return result[0].values[0][0]
+    const stmt = appDb.prepare('INSERT INTO sessions (pdf_path) VALUES (?)')
+    const result = stmt.run(pdfPath)
+    return result.lastInsertRowid
   } catch (error) {
     log.error('Error creating session:', error)
     return null
@@ -148,45 +105,44 @@ ipcMain.handle('create-session', (_event, pdfPath: string) => {
 })
 
 ipcMain.handle('update-session', (_event, sessionId: number, pdfPath: string) => {
-  if (!db) return
-  db.run('UPDATE sessions SET pdf_path = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [pdfPath, sessionId])
-  saveDatabase()
+  const stmt = appDb.prepare('UPDATE sessions SET pdf_path = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+  stmt.run(pdfPath, sessionId)
 })
 
 ipcMain.handle('get-messages', (_event, sessionId: number) => {
-  if (!db) return []
-  const result = db.exec('SELECT * FROM messages WHERE session_id = ? ORDER BY timestamp ASC', [sessionId])
-  if (result.length === 0) return []
-  return result[0].values.map(row => ({
-    id: row[0],
-    session_id: row[1],
-    role: row[2],
-    content: row[3],
-    timestamp: row[4]
-  }))
+  try {
+    const stmt = appDb.prepare('SELECT * FROM messages WHERE session_id = ? ORDER BY timestamp ASC')
+    return stmt.all(sessionId)
+  } catch (error) {
+    log.error('Error getting messages:', error)
+    return []
+  }
 })
 
 ipcMain.handle('add-message', (_event, sessionId: number, role: string, content: string) => {
-  if (!db) return
-  db.run('INSERT INTO messages (session_id, role, content) VALUES (?, ?, ?)', [sessionId, role, content])
-  db.run('UPDATE sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?', [sessionId])
-  saveDatabase()
-  const result = db.exec('SELECT last_insert_rowid()')
-  return result[0].values[0][0]
+  try {
+    const stmt = appDb.prepare('INSERT INTO messages (session_id, role, content) VALUES (?, ?, ?)')
+    const result = stmt.run(sessionId, role, content)
+    const updateStmt = appDb.prepare('UPDATE sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+    updateStmt.run(sessionId)
+    return result.lastInsertRowid
+  } catch (error) {
+    log.error('Error adding message:', error)
+    return null
+  }
 })
 
 ipcMain.handle('clear-messages', (_event, sessionId: number) => {
-  if (!db) return
-  db.run('DELETE FROM messages WHERE session_id = ?', [sessionId])
-  saveDatabase()
+  const stmt = appDb.prepare('DELETE FROM messages WHERE session_id = ?')
+  stmt.run(sessionId)
 })
 
-ipcMain.handle('ask', async (_, message: string) => {
+ipcMain.handle('ask', async (_, message: string, sessionId: number) => {
   const response = await invokeAgent({
     messages: [{ role: 'user', content: message }],
   }, {
     configurable: {
-      thread_id: "thread_1",
+      thread_id: `session_${sessionId}`,
     },
   })
   return response
@@ -229,7 +185,7 @@ ipcMain.handle('window-close', () => {
 })
 
 app.whenReady().then(async () => {
-  await initDatabase()
+  initDatabase()
   createWindow()
 })
 
@@ -237,7 +193,6 @@ app.on('window-all-closed', async () => {
   if (process.platform !== 'darwin') {
     app.quit()
   }
-
 })
 
 app.on('activate', () => {

@@ -54,7 +54,7 @@ function ChatPanel({
         await loadMessages();
 
         setIsTyping(true);
-        const response = await window.electronAPI.ask(fullMessage);
+        const response = await window.electronAPI.ask(fullMessage, sessionId!);
         setIsTyping(false);
 
         console.log("Full response:", JSON.stringify(response, null, 2));

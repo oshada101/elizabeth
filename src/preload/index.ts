@@ -35,7 +35,7 @@ const api = {
         ipcRenderer.invoke("add-message", sessionId, role, content),
     clearMessages: (sessionId: number): Promise<void> =>
         ipcRenderer.invoke("clear-messages", sessionId),
-    ask: (message: string) => ipcRenderer.invoke("ask", message),
+    ask: (message: string, sessionId: number) => ipcRenderer.invoke("ask", message, sessionId),
     windowMinimize: () => ipcRenderer.invoke("window-minimize"),
     windowMaximize: () => ipcRenderer.invoke("window-maximize"),
     windowClose: () => ipcRenderer.invoke("window-close"),

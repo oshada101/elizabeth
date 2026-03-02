@@ -24,7 +24,7 @@ declare global {
                 content: string,
             ) => Promise<number>;
             clearMessages: (sessionId: number) => Promise<void>;
-            ask: (message: string) => Promise<any>;
+            ask: (message: string, sessionId: number) => Promise<any>;
             windowMinimize: () => Promise<void>;
             windowMaximize: () => Promise<void>;
             windowClose: () => Promise<void>;
