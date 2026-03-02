@@ -25,12 +25,6 @@ declare global {
             ) => Promise<number>;
             clearMessages: (sessionId: number) => Promise<void>;
             ask: (message: string, sessionId: number) => Promise<any>;
-            onAskStream: (callback: (event: {
-                type: string;
-                content?: string;
-                tool?: string;
-                error?: string;
-            }) => void) => () => void;
             windowMinimize: () => Promise<void>;
             windowMaximize: () => Promise<void>;
             windowClose: () => Promise<void>;
@@ -148,6 +142,27 @@ function App() {
     }, []);
 
     const menuItems = [
+        {
+            label: "New Session",
+            icon: (
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                    <path d="M10 5a1 1 0 011 1v3h3a1 1 0 110 2h-3v3a1 1 0 11-2 0v-3H6a1 1 0 110-2h3V6a1 1 0 011-1z" />
+                </svg>
+            ),
+            action: async () => {
+                try {
+                    const newId = await window.electronAPI.createSession("");
+                    if (newId) {
+                        setSessionId(newId);
+                        setSelectedText(null);
+                        // ensure UI loads new (empty) messages
+                        await window.electronAPI.clearMessages(newId);
+                    }
+                } catch (e) {
+                    console.error('Failed to create new session', e);
+                }
+            },
+        },
         {
             label: "Settings",
             icon: (

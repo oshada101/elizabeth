@@ -15,28 +15,6 @@ export interface Message {
     timestamp: string;
 }
 
-export interface StreamChunk {
-    type: "content";
-    content: string;
-}
-
-export interface StreamTool {
-    type: "tool_start" | "tool_end";
-    tool: string;
-}
-
-export interface StreamDone {
-    type: "done";
-    content: string;
-}
-
-export interface StreamError {
-    type: "error";
-    error: string;
-}
-
-type StreamEvent = StreamChunk | StreamTool | StreamDone | StreamError;
-
 const api = {
     openFileDialog: (): Promise<string | null> =>
         ipcRenderer.invoke("open-file-dialog"),
@@ -58,24 +36,6 @@ const api = {
     clearMessages: (sessionId: number): Promise<void> =>
         ipcRenderer.invoke("clear-messages", sessionId),
     ask: (message: string, sessionId: number) => ipcRenderer.invoke("ask", message, sessionId),
-    onAskStream: (callback: (event: StreamEvent) => void) => {
-        const chunkHandler = (_: any, data: StreamChunk) => callback(data);
-        const toolHandler = (_: any, data: StreamTool) => callback(data);
-        const doneHandler = (_: any, data: StreamDone) => callback(data);
-        const errorHandler = (_: any, data: StreamError) => callback(data);
-
-        ipcRenderer.on("ask:chunk", chunkHandler);
-        ipcRenderer.on("ask:tool", toolHandler);
-        ipcRenderer.on("ask:done", doneHandler);
-        ipcRenderer.on("ask:error", errorHandler);
-
-        return () => {
-            ipcRenderer.removeListener("ask:chunk", chunkHandler);
-            ipcRenderer.removeListener("ask:tool", toolHandler);
-            ipcRenderer.removeListener("ask:done", doneHandler);
-            ipcRenderer.removeListener("ask:error", errorHandler);
-        };
-    },
     windowMinimize: () => ipcRenderer.invoke("window-minimize"),
     windowMaximize: () => ipcRenderer.invoke("window-maximize"),
     windowClose: () => ipcRenderer.invoke("window-close"),

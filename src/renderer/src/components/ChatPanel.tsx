@@ -17,10 +17,7 @@ function ChatPanel({
     const [messages, setMessages] = useState<Message[]>([]);
     const [inputValue, setInputValue] = useState("");
     const [isTyping, setIsTyping] = useState(false);
-    const [streamingContent, setStreamingContent] = useState("");
-    const [activeTool, setActiveTool] = useState<string | null>(null);
     const messagesEndRef = useRef<HTMLDivElement>(null);
-    const streamingContentRef = useRef("");
 
     const scrollToBottom = () => {
         messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -40,6 +37,8 @@ function ChatPanel({
         if (!sessionId) return;
         const msgs = await window.electronAPI.getMessages(sessionId);
         setMessages(msgs);
+        console.log(msgs);
+        return msgs.length > 0 ? msgs.length - 1 : 0;
     };
 
     const handleSendMessage = useCallback(async () => {
@@ -54,38 +53,29 @@ function ChatPanel({
         onClearSelection();
 
         await window.electronAPI.addMessage(sessionId, "user", fullMessage);
-        await loadMessages();
+        const userMsgIndex = await loadMessages();
 
         setIsTyping(true);
-        setStreamingContent("");
-        setActiveTool(null);
-        streamingContentRef.current = "";
+        const response = await window.electronAPI.ask(fullMessage, sessionId);
+        console.log(response);
+        setIsTyping(false);
 
-        const cleanup = window.electronAPI.onAskStream((event) => {
-            if (event.type === "content") {
-                streamingContentRef.current += event.content || "";
-                setStreamingContent(streamingContentRef.current);
-            } else if (event.type === "tool_start") {
-                setActiveTool(event.tool || null);
-            } else if (event.type === "tool_end") {
-                setActiveTool(null);
-            } else if (event.type === "done") {
-                setIsTyping(false);
-            } else if (event.type === "error") {
-                setIsTyping(false);
-                console.error("Stream error:", event.error);
-            }
-        });
+        const messagesAfterUser =
+            userMsgIndex !== -1 ? response.messages.slice(userMsgIndex + 1) : [];
 
-        await window.electronAPI.ask(fullMessage, sessionId!);
+        const aiMessages = messagesAfterUser;
 
-        cleanup();
+        console.log(aiMessages);
 
-        const finalContent = streamingContentRef.current;
-        if (finalContent) {
-            await window.electronAPI.addMessage(sessionId, "assistant", finalContent);
+        for (const msg of aiMessages) {
+                const role = msg.type === 'tool' ? 'tool' : 'assistant';
+                const content = msg.type === 'tool' ? msg.name : msg.content;
+            await window.electronAPI.addMessage(
+                sessionId,
+                role,
+                content,
+            );
         }
-        setStreamingContent("");
         await loadMessages();
     }, [inputValue, sessionId, selectedText, onClearSelection]);
 
@@ -180,6 +170,13 @@ function ChatPanel({
                     </div>
                 ) : (
                     messages.map((msg) => {
+                        if(msg.role === 'tool') {
+                            return (
+                                <div className="flex">
+                                    <p className=" bg-primary-500/15 text-primary-200 border border-primary-500/15 px-3 py-1.5 rounded-xl text-xs backdrop-blur-sm ">tool called: {msg.content}</p>
+                                </div>
+                            )
+                        }
                         const { mainText, attachedText } = parseMessage(
                             msg.content,
                         );
@@ -219,27 +216,99 @@ function ChatPanel({
                                             <div className="text-sm leading-relaxed prose prose-invert prose-sm max-w-none">
                                                 <ReactMarkdown
                                                     components={{
-                                                        p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
-                                                        ul: ({ children }) => <ul className="list-disc list-inside mb-2 space-y-1">{children}</ul>,
-                                                        ol: ({ children }) => <ol className="list-decimal list-inside mb-2 space-y-1">{children}</ol>,
-                                                        li: ({ children }) => <li className="text-primary-100">{children}</li>,
-                                                        code: ({ children, className }) => {
-                                                            const isInline = !className;
+                                                        p: ({ children }) => (
+                                                            <p className="mb-2 last:mb-0">
+                                                                {children}
+                                                            </p>
+                                                        ),
+                                                        ul: ({ children }) => (
+                                                            <ul className="list-disc list-inside mb-2 space-y-1">
+                                                                {children}
+                                                            </ul>
+                                                        ),
+                                                        ol: ({ children }) => (
+                                                            <ol className="list-decimal list-inside mb-2 space-y-1">
+                                                                {children}
+                                                            </ol>
+                                                        ),
+                                                        li: ({ children }) => (
+                                                            <li className="text-primary-100">
+                                                                {children}
+                                                            </li>
+                                                        ),
+                                                        code: ({
+                                                            children,
+                                                            className,
+                                                        }) => {
+                                                            const isInline =
+                                                                !className;
                                                             return isInline ? (
-                                                                <code className="bg-white/10 px-1.5 py-0.5 rounded text-purple-200 text-xs">{children}</code>
+                                                                <code className="bg-white/10 px-1.5 py-0.5 rounded text-purple-200 text-xs">
+                                                                    {children}
+                                                                </code>
                                                             ) : (
-                                                                <code className={`${className} block bg-primary-900/50 p-2 rounded-lg my-2 overflow-x-auto text-xs`}>{children}</code>
+                                                                <code
+                                                                    className={`${className} block bg-primary-900/50 p-2 rounded-lg my-2 overflow-x-auto text-xs`}
+                                                                >
+                                                                    {children}
+                                                                </code>
                                                             );
                                                         },
-                                                        pre: ({ children }) => <pre className="bg-primary-900/50 p-3 rounded-lg my-2 overflow-x-auto text-xs">{children}</pre>,
-                                                        strong: ({ children }) => <strong className="text-purple-200 font-semibold">{children}</strong>,
-                                                        em: ({ children }) => <em className="text-primary-200">{children}</em>,
-                                                        a: ({ href, children }) => <a href={href} className="text-purple-300 hover:text-purple-200 underline" target="_blank" rel="noopener noreferrer">{children}</a>,
-                                                        h1: ({ children }) => <h1 className="text-xl font-bold text-purple-100 mb-2">{children}</h1>,
-                                                        h2: ({ children }) => <h2 className="text-lg font-semibold text-purple-100 mb-1.5">{children}</h2>,
-                                                        h3: ({ children }) => <h3 className="text-base font-medium text-purple-100 mb-1">{children}</h3>,
-                                                        blockquote: ({ children }) => <blockquote className="border-l-2 border-purple-500/50 pl-3 italic text-primary-300 my-2">{children}</blockquote>,
-                                                        hr: () => <hr className="border-white/10 my-3" />,
+                                                        pre: ({ children }) => (
+                                                            <pre className="bg-primary-900/50 p-3 rounded-lg my-2 overflow-x-auto text-xs">
+                                                                {children}
+                                                            </pre>
+                                                        ),
+                                                        strong: ({
+                                                            children,
+                                                        }) => (
+                                                            <strong className="text-purple-200 font-semibold">
+                                                                {children}
+                                                            </strong>
+                                                        ),
+                                                        em: ({ children }) => (
+                                                            <em className="text-primary-200">
+                                                                {children}
+                                                            </em>
+                                                        ),
+                                                        a: ({
+                                                            href,
+                                                            children,
+                                                        }) => (
+                                                            <a
+                                                                href={href}
+                                                                className="text-purple-300 hover:text-purple-200 underline"
+                                                                target="_blank"
+                                                                rel="noopener noreferrer"
+                                                            >
+                                                                {children}
+                                                            </a>
+                                                        ),
+                                                        h1: ({ children }) => (
+                                                            <h1 className="text-xl font-bold text-purple-100 mb-2">
+                                                                {children}
+                                                            </h1>
+                                                        ),
+                                                        h2: ({ children }) => (
+                                                            <h2 className="text-lg font-semibold text-purple-100 mb-1.5">
+                                                                {children}
+                                                            </h2>
+                                                        ),
+                                                        h3: ({ children }) => (
+                                                            <h3 className="text-base font-medium text-purple-100 mb-1">
+                                                                {children}
+                                                            </h3>
+                                                        ),
+                                                        blockquote: ({
+                                                            children,
+                                                        }) => (
+                                                            <blockquote className="border-l-2 border-purple-500/50 pl-3 italic text-primary-300 my-2">
+                                                                {children}
+                                                            </blockquote>
+                                                        ),
+                                                        hr: () => (
+                                                            <hr className="border-white/10 my-3" />
+                                                        ),
                                                     }}
                                                 >
                                                     {mainText}
@@ -262,57 +331,7 @@ function ChatPanel({
                     })
                 )}
 
-                {activeTool && (
-                    <div className="flex justify-start animate-fade-in">
-                        <div className="max-w-[80%]">
-                            <div className="mb-1.5 px-3 py-1.5 rounded-xl text-xs backdrop-blur-sm bg-primary-500/15 text-primary-200 border border-primary-500/15">
-                                <span className="font-medium">🔧 Using tool: </span>
-                                {activeTool}
-                            </div>
-                        </div>
-                    </div>
-                )}
-
-                {streamingContent && (
-                    <div className="flex justify-start animate-fade-in">
-                        <div className="max-w-[80%]">
-                            <div className="bg-white/8 backdrop-blur-sm rounded-2xl rounded-bl-lg px-4 py-2.5 border border-white/8 shadow-glass-sm">
-                                <div className="text-sm leading-relaxed prose prose-invert prose-sm max-w-none">
-                                    <ReactMarkdown
-                                        components={{
-                                            p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
-                                            ul: ({ children }) => <ul className="list-disc list-inside mb-2 space-y-1">{children}</ul>,
-                                            ol: ({ children }) => <ol className="list-decimal list-inside mb-2 space-y-1">{children}</ol>,
-                                            li: ({ children }) => <li className="text-primary-100">{children}</li>,
-                                            code: ({ children, className }) => {
-                                                const isInline = !className;
-                                                return isInline ? (
-                                                    <code className="bg-white/10 px-1.5 py-0.5 rounded text-purple-200 text-xs">{children}</code>
-                                                ) : (
-                                                    <code className={`${className} block bg-primary-900/50 p-2 rounded-lg my-2 overflow-x-auto text-xs`}>{children}</code>
-                                                );
-                                            },
-                                            pre: ({ children }) => <pre className="bg-primary-900/50 p-3 rounded-lg my-2 overflow-x-auto text-xs">{children}</pre>,
-                                            strong: ({ children }) => <strong className="text-purple-200 font-semibold">{children}</strong>,
-                                            em: ({ children }) => <em className="text-primary-200">{children}</em>,
-                                            a: ({ href, children }) => <a href={href} className="text-purple-300 hover:text-purple-200 underline" target="_blank" rel="noopener noreferrer">{children}</a>,
-                                            h1: ({ children }) => <h1 className="text-xl font-bold text-purple-100 mb-2">{children}</h1>,
-                                            h2: ({ children }) => <h2 className="text-lg font-semibold text-purple-100 mb-1.5">{children}</h2>,
-                                            h3: ({ children }) => <h3 className="text-base font-medium text-purple-100 mb-1">{children}</h3>,
-                                            blockquote: ({ children }) => <blockquote className="border-l-2 border-purple-500/50 pl-3 italic text-primary-300 my-2">{children}</blockquote>,
-                                            hr: () => <hr className="border-white/10 my-3" />,
-                                        }}
-                                    >
-                                        {streamingContent}
-                                    </ReactMarkdown>
-                                </div>
-                                <p className="text-[11px] mt-1.5 text-primary-400/60">Streaming...</p>
-                            </div>
-                        </div>
-                    </div>
-                )}
-
-                {isTyping && !streamingContent && (
+                {isTyping && (
                     <div className="flex justify-start animate-fade-in">
                         <div className="bg-white/8 backdrop-blur-sm rounded-2xl rounded-bl-lg px-4 py-3 border border-white/8 shadow-glass-sm">
                             <div className="flex space-x-1.5">
@@ -390,11 +409,12 @@ function ChatPanel({
                         onChange={(e) => setInputValue(e.target.value)}
                         onKeyPress={handleKeyPress}
                         placeholder="Type your message..."
-                        className="flex-1 glass-input text-white text-sm placeholder-primary-400/50 rounded-2xl px-4 py-3 focus:outline-none"
+                        disabled={isTyping}
+                        className="flex-1 glass-input text-white text-sm placeholder-primary-400/50 rounded-2xl px-4 py-3 focus:outline-none disabled:opacity-50"
                     />
                     <button
                         onClick={handleSendMessage}
-                        disabled={!inputValue.trim()}
+                        disabled={!inputValue.trim() || isTyping}
                         className="glass-button p-3 text-white rounded-2xl disabled:opacity-30"
                     >
                         <svg

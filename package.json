@@ -34,7 +34,13 @@
   "dependencies": {
   
     
+  "@langchain/core": "^1.1.29",
+  
+    
   "@langchain/langgraph-checkpoint-sqlite": "^1.0.1",
+  
+    
+  "@langchain/ollama": "^1.2.5",
   
     
   "@langchain/openai": "^1.2.10",
@@ -53,6 +59,9 @@
   
     
   "langchain": "^1.2.27",
+  
+    
+  "ollama": "^0.6.3",
   
     
   "pdfjs-dist": "^4.0.379",

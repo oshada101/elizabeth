@@ -1,13 +1,12 @@
 import { ChatOpenAI } from "@langchain/openai";
+import { ChatOllama } from "@langchain/ollama";
 import { SqliteSaver } from "@langchain/langgraph-checkpoint-sqlite";
 import { createAgent, tool } from "langchain";
-import { HumanMessage } from "@langchain/core/messages";
 import Database from "better-sqlite3";
 import z from "zod";
 import { getDefaultApiKey } from "./keyManager";
-import { app, BrowserWindow } from 'electron';
+import { app } from 'electron';
 import { join } from 'path';
-import log from "electron-log";
 
 const getWeather = tool(
     (input: { city: string }) => `It's always sunny in ${input.city}!`,
@@ -21,28 +20,29 @@ const getWeather = tool(
 );
 
 async function getModel() {
-    const { key, model, provider, baseUrl } = await getDefaultApiKey();
+    const { key, model, baseUrl, provider } = await getDefaultApiKey();
+    if (!model || !key) throw new Error('Model or API key is missing');
 
-    if (!model || !key) {
-        throw new Error('Model or API key is missing'); 
+    const isLocal = provider === 'local';
+    
+    if (isLocal) {
+        return new ChatOllama({
+            model,
+            baseUrl,
+            temperature: 0.1,
+        })
     }
-    return baseUrl
-        ? new ChatOpenAI({
-              model: model,
-              apiKey: key,
-              streaming: true,
-              configuration: {
-                  baseURL: baseUrl,
-              },
-          })
-        : new ChatOpenAI({
-              model: model,
-              apiKey: key,
-              streaming: true,
-              configuration: {
-                  baseURL: "https://openrouter.ai/api/v1",
-              },
-          });
+
+    const isDeepSeek = provider === 'deepseek';
+    const defaultBaseUrl = isDeepSeek ? "https://api.deepseek.com/v1" : "https://openrouter.ai/api/v1";
+
+    return new ChatOpenAI({
+        model,
+        apiKey: key,
+        configuration: {
+            baseURL: baseUrl || defaultBaseUrl,
+        },
+    });
 }
 
 const userDataPath = app.getPath('userData');
@@ -50,8 +50,9 @@ const dbPath = join(userDataPath, 'app.db');
 export const db = new Database(dbPath);
 export const saver = new SqliteSaver(db);
 
-export async function streamAgent(messages: any[], config: any, window: BrowserWindow | null) {
+export async function invokeAgent(messages: any[], config: any) {
     const model = await getModel();
+    
     const agent = createAgent({
         model,
         tools: [getWeather],
@@ -59,39 +60,6 @@ export async function streamAgent(messages: any[], config: any, window: BrowserW
         checkpointer: saver,
     });
 
-    let currentTool: string | null = null;
-    let currentContent = "";
-
-    try {
-        for await (const event of (agent as any).streamEvents(messages, config, {
-            version: "v1"
-        })) {
-            const eventType = event.event;
-            const data = event.data;
-
-            if (eventType === "on_chat_model_stream") {
-                const chunk = data?.chunk?.content;
-                if (chunk) {
-                    currentContent += chunk;
-                    window?.webContents.send("ask:chunk", { type: "content", content: chunk });
-                }
-            } else if (eventType === "on_tool_start") {
-                currentTool = data?.input?.name || event.name;
-                window?.webContents.send("ask:tool", { type: "tool_start", tool: currentTool });
-                log.info(`Tool started: ${currentTool}`);
-            } else if (eventType === "on_tool_end") {
-                const toolName = currentTool;
-                currentTool = null;
-                window?.webContents.send("ask:tool", { type: "tool_end", tool: toolName });
-                log.info(`Tool ended: ${toolName}`);
-            }
-        }
-
-        window?.webContents.send("ask:done", { content: currentContent });
-        return currentContent;
-    } catch (error) {
-        log.error("Streaming error:", error);
-        window?.webContents.send("ask:error", { error: String(error) });
-        throw error;
-    }
+    console.log(messages)
+    return (agent as any).invoke({ messages }, config);
 }
