@@ -25,6 +25,12 @@ declare global {
             ) => Promise<number>;
             clearMessages: (sessionId: number) => Promise<void>;
             ask: (message: string, sessionId: number) => Promise<any>;
+            onAskStream: (callback: (event: {
+                type: string;
+                content?: string;
+                tool?: string;
+                error?: string;
+            }) => void) => () => void;
             windowMinimize: () => Promise<void>;
             windowMaximize: () => Promise<void>;
             windowClose: () => Promise<void>;

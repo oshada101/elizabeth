@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain, dialog } from 'electron'
 import { join } from 'path'
 import { existsSync } from 'fs'
 import log from 'electron-log'
-import { invokeAgent, db as appDb } from './agent'
+import { db as appDb, streamAgent } from './agent'
 import * as keyManager from './keyManager'
 
 log.initialize()
@@ -138,14 +138,16 @@ ipcMain.handle('clear-messages', (_event, sessionId: number) => {
 })
 
 ipcMain.handle('ask', async (_, message: string, sessionId: number) => {
-  const response = await invokeAgent({
-    messages: [{ role: 'user', content: message }],
-  }, {
-    configurable: {
-      thread_id: `session_${sessionId}`,
+  const content = await streamAgent(
+    [{ role: 'user', content: message }],
+    {
+      configurable: {
+        thread_id: `session_${sessionId}`,
+      },
     },
-  })
-  return response
+    mainWindow
+  );
+  return { content };
 })
 
 ipcMain.handle('api-keys:save', async (_event, data) => {

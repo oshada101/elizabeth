@@ -17,7 +17,10 @@ function ChatPanel({
     const [messages, setMessages] = useState<Message[]>([]);
     const [inputValue, setInputValue] = useState("");
     const [isTyping, setIsTyping] = useState(false);
+    const [streamingContent, setStreamingContent] = useState("");
+    const [activeTool, setActiveTool] = useState<string | null>(null);
     const messagesEndRef = useRef<HTMLDivElement>(null);
+    const streamingContentRef = useRef("");
 
     const scrollToBottom = () => {
         messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -54,27 +57,35 @@ function ChatPanel({
         await loadMessages();
 
         setIsTyping(true);
-        const response = await window.electronAPI.ask(fullMessage, sessionId!);
-        setIsTyping(false);
+        setStreamingContent("");
+        setActiveTool(null);
+        streamingContentRef.current = "";
 
-        console.log("Full response:", JSON.stringify(response, null, 2));
+        const cleanup = window.electronAPI.onAskStream((event) => {
+            if (event.type === "content") {
+                streamingContentRef.current += event.content || "";
+                setStreamingContent(streamingContentRef.current);
+            } else if (event.type === "tool_start") {
+                setActiveTool(event.tool || null);
+            } else if (event.type === "tool_end") {
+                setActiveTool(null);
+            } else if (event.type === "done") {
+                setIsTyping(false);
+            } else if (event.type === "error") {
+                setIsTyping(false);
+                console.error("Stream error:", event.error);
+            }
+        });
 
-        // Only get messages WITHOUT tool calls (the real answers)
-        const answers = response.messages
-            .filter(
-                (m: any) =>
-                    m.type === "ai" &&
-                    (!m.tool_calls || m.tool_calls.length === 0),
-            )
-            .map((m: any) => m.content);
+        await window.electronAPI.ask(fullMessage, sessionId!);
 
-        console.log("Clean answers:", answers);
-        // Output: ["The weather in Los Angeles is always sunny! It's a great day to be outdoors in LA."]
+        cleanup();
 
-        // Add to message system
-        for (const answer of answers) {
-            await window.electronAPI.addMessage(sessionId, "assistant", answer);
+        const finalContent = streamingContentRef.current;
+        if (finalContent) {
+            await window.electronAPI.addMessage(sessionId, "assistant", finalContent);
         }
+        setStreamingContent("");
         await loadMessages();
     }, [inputValue, sessionId, selectedText, onClearSelection]);
 
@@ -251,7 +262,57 @@ function ChatPanel({
                     })
                 )}
 
-                {isTyping && (
+                {activeTool && (
+                    <div className="flex justify-start animate-fade-in">
+                        <div className="max-w-[80%]">
+                            <div className="mb-1.5 px-3 py-1.5 rounded-xl text-xs backdrop-blur-sm bg-primary-500/15 text-primary-200 border border-primary-500/15">
+                                <span className="font-medium">🔧 Using tool: </span>
+                                {activeTool}
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {streamingContent && (
+                    <div className="flex justify-start animate-fade-in">
+                        <div className="max-w-[80%]">
+                            <div className="bg-white/8 backdrop-blur-sm rounded-2xl rounded-bl-lg px-4 py-2.5 border border-white/8 shadow-glass-sm">
+                                <div className="text-sm leading-relaxed prose prose-invert prose-sm max-w-none">
+                                    <ReactMarkdown
+                                        components={{
+                                            p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
+                                            ul: ({ children }) => <ul className="list-disc list-inside mb-2 space-y-1">{children}</ul>,
+                                            ol: ({ children }) => <ol className="list-decimal list-inside mb-2 space-y-1">{children}</ol>,
+                                            li: ({ children }) => <li className="text-primary-100">{children}</li>,
+                                            code: ({ children, className }) => {
+                                                const isInline = !className;
+                                                return isInline ? (
+                                                    <code className="bg-white/10 px-1.5 py-0.5 rounded text-purple-200 text-xs">{children}</code>
+                                                ) : (
+                                                    <code className={`${className} block bg-primary-900/50 p-2 rounded-lg my-2 overflow-x-auto text-xs`}>{children}</code>
+                                                );
+                                            },
+                                            pre: ({ children }) => <pre className="bg-primary-900/50 p-3 rounded-lg my-2 overflow-x-auto text-xs">{children}</pre>,
+                                            strong: ({ children }) => <strong className="text-purple-200 font-semibold">{children}</strong>,
+                                            em: ({ children }) => <em className="text-primary-200">{children}</em>,
+                                            a: ({ href, children }) => <a href={href} className="text-purple-300 hover:text-purple-200 underline" target="_blank" rel="noopener noreferrer">{children}</a>,
+                                            h1: ({ children }) => <h1 className="text-xl font-bold text-purple-100 mb-2">{children}</h1>,
+                                            h2: ({ children }) => <h2 className="text-lg font-semibold text-purple-100 mb-1.5">{children}</h2>,
+                                            h3: ({ children }) => <h3 className="text-base font-medium text-purple-100 mb-1">{children}</h3>,
+                                            blockquote: ({ children }) => <blockquote className="border-l-2 border-purple-500/50 pl-3 italic text-primary-300 my-2">{children}</blockquote>,
+                                            hr: () => <hr className="border-white/10 my-3" />,
+                                        }}
+                                    >
+                                        {streamingContent}
+                                    </ReactMarkdown>
+                                </div>
+                                <p className="text-[11px] mt-1.5 text-primary-400/60">Streaming...</p>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {isTyping && !streamingContent && (
                     <div className="flex justify-start animate-fade-in">
                         <div className="bg-white/8 backdrop-blur-sm rounded-2xl rounded-bl-lg px-4 py-3 border border-white/8 shadow-glass-sm">
                             <div className="flex space-x-1.5">
