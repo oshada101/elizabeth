@@ -25,6 +25,13 @@ declare global {
             ) => Promise<number>;
             clearMessages: (sessionId: number) => Promise<void>;
             ask: (message: string, sessionId: number) => Promise<any>;
+            loadPdfText: (pdfData: Uint8Array, filePath: string, sessionId: number) => Promise<string | null>;
+            documents: {
+                list: () => Promise<Array<{id: string, file_name: string, file_path: string, total_chunks: number, last_accessed: string}>>;
+                switch: (hash: string) => Promise<boolean>;
+                current: () => Promise<string | null>;
+                delete: (hash: string) => Promise<boolean>;
+            };
             windowMinimize: () => Promise<void>;
             windowMaximize: () => Promise<void>;
             windowClose: () => Promise<void>;
@@ -54,18 +61,38 @@ export interface Message {
     timestamp: string;
 }
 
+interface DocumentInfo {
+    id: string;
+    file_name: string;
+    file_path: string;
+    total_chunks: number;
+    last_accessed: string;
+}
+
+interface DocumentInfo {
+    id: string;
+    file_name: string;
+    file_path: string;
+    total_chunks: number;
+    last_accessed: string;
+}
+
 function App() {
     const [pdfPath, setPdfPath] = useState<string | null>(null);
     const [pdfData, setPdfData] = useState<Uint8Array | null>(null);
+    const [pdfText, setPdfText] = useState<string | null>(null);
     const [pdf, setPdf] = useState<pdfjsLib.PDFDocumentProxy | null>(null);
     const [fileName, setFileName] = useState<string | null>(null);
     const [sessionId, setSessionId] = useState<number | null>(null);
     const [selectedText, setSelectedText] = useState<string | null>(null);
     const [tocOpen, setTocOpen] = useState(false);
     const [chatOpen, setChatOpen] = useState(true);
+    const [docsOpen, setDocsOpen] = useState(false);
     const [currentPage, setCurrentPage] = useState(1);
     const [menuOpen, setMenuOpen] = useState(false);
     const [settingsOpen, setSettingsOpen] = useState(false);
+    const [documents, setDocuments] = useState<DocumentInfo[]>([]);
+    const [currentDocId, setCurrentDocId] = useState<string | null>(null);
 
     useEffect(() => {
         const initSession = async () => {
@@ -87,6 +114,24 @@ function App() {
         };
         initSession();
     }, []);
+
+    // Load documents list on mount and when pdfData changes
+    useEffect(() => {
+        const loadDocuments = async () => {
+            try {
+                console.log('Loading documents list...');
+                const docs = await window.electronAPI.documents.list();
+                console.log('Documents loaded:', docs.length);
+                setDocuments(docs);
+                const current = await window.electronAPI.documents.current();
+                console.log('Current document:', current);
+                setCurrentDocId(current);
+            } catch (error) {
+                console.error('Error loading documents:', error);
+            }
+        };
+        loadDocuments();
+    }, []); // Load once on mount
 
     useEffect(() => {
         const handleClickOutside = () => setMenuOpen(false);
@@ -115,10 +160,48 @@ function App() {
         if (file.type === "application/pdf") {
             const arrayBuffer = await file.arrayBuffer();
             setPdfData(new Uint8Array(arrayBuffer));
-            setPdfPath(null);
+            setPdfPath(file.name); // Use filename as path for drag-drop
             setFileName(file.name);
         }
     }, []);
+
+    const handleSwitchDocument = useCallback(async (hash: string) => {
+        try {
+            const success = await window.electronAPI.documents.switch(hash);
+            if (success) {
+                setCurrentDocId(hash);
+                const doc = documents.find(d => d.id === hash);
+                if (doc && doc.file_path) {
+                    const buffer = await window.electronAPI.readFile(doc.file_path);
+                    if (buffer) {
+                        setPdfData(new Uint8Array(buffer));
+                        setPdfPath(doc.file_path);
+                        setFileName(doc.file_name);
+                    }
+                }
+            }
+        } catch (error) {
+            console.error('Error switching document:', error);
+        }
+    }, [documents]);
+
+    const handleDeleteDocument = useCallback(async (e: React.MouseEvent, hash: string) => {
+        e.stopPropagation();
+        try {
+            const success = await window.electronAPI.documents.delete(hash);
+            if (success) {
+                setDocuments(prev => prev.filter(d => d.id !== hash));
+                if (currentDocId === hash) {
+                    setCurrentDocId(null);
+                    setPdfData(null);
+                    setPdfPath('');
+                    setFileName('');
+                }
+            }
+        } catch (error) {
+            console.error('Error deleting document:', error);
+        }
+    }, [currentDocId]);
 
     const handleTextSelect = useCallback((text: string) => {
         setSelectedText(text);
@@ -140,6 +223,16 @@ function App() {
     const handlePdfLoad = useCallback((pdfDoc: pdfjsLib.PDFDocumentProxy) => {
         setPdf(pdfDoc);
     }, []);
+
+    useEffect(() => {
+        if (pdfData && sessionId && pdfPath) {
+            window.electronAPI.loadPdfText(pdfData, pdfPath, sessionId).then((hash) => {
+                if (hash) {
+                    console.log('PDF processed, document hash:', hash.substring(0, 8) + '...');
+                }
+            });
+        }
+    }, [pdfData, sessionId, pdfPath]);
 
     const menuItems = [
         {
@@ -301,7 +394,7 @@ function App() {
                     className={`h-full rounded-2xl overflow-hidden glass-panel shadow-glass transition-all duration-300 ease-in-out ${chatOpen ? "w-[600px] opacity-100" : "w-0 opacity-0 p-0"
                         }`}
                 >
-                    {chatOpen && (
+{chatOpen && (
                         <ChatPanel
                             sessionId={sessionId}
                             selectedText={selectedText}
@@ -310,8 +403,91 @@ function App() {
                     )}
                 </div>
 
+                {/* Documents Panel - Left Side */}
+                <div
+                    className={`h-full rounded-2xl overflow-hidden glass-panel shadow-glass transition-all duration-300 ease-in-out ${docsOpen ? "w-80 opacity-100" : "w-0 opacity-0 p-0"
+                        }`}
+                >
+                    {docsOpen && (
+                        <div className="h-full flex flex-col">
+                            <div className="p-4 border-b border-white/10">
+                                <h3 className="text-lg font-semibold text-purple-200">Documents</h3>
+                                <p className="text-xs text-purple-400/70 mt-1">
+                                    {documents.length} document{documents.length !== 1 ? 's' : ''} embedded
+                                </p>
+                            </div>
+                            <div className="flex-1 overflow-y-auto p-2 space-y-2">
+                                {documents.map((doc) => (
+                                    <button
+                                        key={doc.id}
+                                        onClick={() => handleSwitchDocument(doc.id)}
+                                        className={`w-full text-left p-3 rounded-xl transition-all duration-200 ${
+                                            currentDocId === doc.id
+                                                ? "bg-purple-500/30 border border-purple-500/30"
+                                                : "bg-white/5 hover:bg-white/10 border border-transparent"
+                                        }`}
+                                    >
+                                        <div className="flex items-start gap-3">
+                                            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-purple-400 mt-0.5 flex-shrink-0" viewBox="0 0 20 20" fill="currentColor">
+                                                <path fillRule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4z" clipRule="evenodd" />
+                                            </svg>
+                                            <div className="flex-1 min-w-0">
+                                                <div className="flex items-center justify-between">
+                                                    <p className="text-sm font-medium text-purple-200 truncate">
+                                                        {doc.file_name}
+                                                    </p>
+                                                    <button
+                                                        onClick={(e) => handleDeleteDocument(e, doc.id)}
+                                                        className="p-1 rounded-lg hover:bg-red-500/30 text-purple-400 hover:text-red-400 transition-colors"
+                                                        title="Remove document"
+                                                    >
+                                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                                                            <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clipRule="evenodd" />
+                                                        </svg>
+                                                    </button>
+                                                </div>
+                                                <p className="text-xs text-purple-400/60 mt-1">
+                                                    {doc.total_chunks} chunks • {new Date(doc.last_accessed).toLocaleDateString()}
+                                                </p>
+                                                {currentDocId === doc.id && (
+                                                    <span className="inline-block mt-2 text-xs bg-purple-500/30 text-purple-300 px-2 py-0.5 rounded-full">
+                                                        Current
+                                                    </span>
+                                                )}
+                                            </div>
+                                        </div>
+                                    </button>
+                                ))}
+                                {documents.length === 0 && (
+                                    <div className="text-center py-8 text-purple-400/50">
+                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 mx-auto mb-3 opacity-50" viewBox="0 0 20 20" fill="currentColor">
+                                            <path fillRule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4z" clipRule="evenodd" />
+                                        </svg>
+                                        <p className="text-sm">No documents yet</p>
+                                        <p className="text-xs mt-1">Open a PDF to get started</p>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    )}
+                </div>
+
                 {/* Floating Toolbar */}
                 <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-primary-900 rounded-full px-2 py-2 flex items-center gap-2 shadow-glass">
+                    <button
+                        onClick={() => setDocsOpen(!docsOpen)}
+                        className={`p-2 rounded-full transition-all duration-200 ${docsOpen
+                            ? "bg-purple-500/30 text-purple-200"
+                            : "bg-white/5 text-primary-300 hover:bg-white/10"
+                            }`}
+                        title="Documents Library"
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                            <path d="M9 2a2 2 0 00-2 2v8a2 2 0 002 2h6a2 2 0 002-2V6.414A2 2 0 0015.414 5L14 3.586A2 2 0 0012.586 3H9z" />
+                            <path d="M3 8a2 2 0 012-2v8a2 2 0 01-2 2H1a1 1 0 011-1V9a1 1 0 01-1-1h1z" />
+                        </svg>
+                    </button>
+                    <div className="w-px h-5 bg-white/10" />
                     <button
                         onClick={() => setTocOpen(!tocOpen)}
                         className={`p-2 rounded-full transition-all duration-200 ${tocOpen

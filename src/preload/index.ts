@@ -15,6 +15,14 @@ export interface Message {
     timestamp: string;
 }
 
+export interface DocumentInfo {
+    id: string;
+    file_name: string;
+    file_path: string;
+    total_chunks: number;
+    last_accessed: string;
+}
+
 const api = {
     openFileDialog: (): Promise<string | null> =>
         ipcRenderer.invoke("open-file-dialog"),
@@ -36,6 +44,14 @@ const api = {
     clearMessages: (sessionId: number): Promise<void> =>
         ipcRenderer.invoke("clear-messages", sessionId),
     ask: (message: string, sessionId: number) => ipcRenderer.invoke("ask", message, sessionId),
+    loadPdfText: (pdfData: Uint8Array, filePath: string, sessionId: number): Promise<string | null> =>
+        ipcRenderer.invoke("load-pdf-text", pdfData, filePath, sessionId),
+    documents: {
+        list: (): Promise<DocumentInfo[]> => ipcRenderer.invoke("documents:list"),
+        switch: (hash: string): Promise<boolean> => ipcRenderer.invoke("documents:switch", hash),
+        current: (): Promise<string | null> => ipcRenderer.invoke("documents:current"),
+        delete: (hash: string): Promise<boolean> => ipcRenderer.invoke("documents:delete", hash),
+    },
     windowMinimize: () => ipcRenderer.invoke("window-minimize"),
     windowMaximize: () => ipcRenderer.invoke("window-maximize"),
     windowClose: () => ipcRenderer.invoke("window-close"),

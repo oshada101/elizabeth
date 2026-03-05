@@ -2,7 +2,8 @@ import { app, BrowserWindow, ipcMain, dialog } from 'electron'
 import { join } from 'path'
 import { existsSync } from 'fs'
 import log from 'electron-log'
-import { db as appDb, invokeAgent } from './agent'
+import { db as appDb } from './db'
+import { invokeAgent, processPdfDocument, getEmbeddedDocuments, switchToDocument, getCurrentDocumentId, deleteEmbeddedDocument } from './agent'
 import * as keyManager from './keyManager'
 
 log.initialize()
@@ -145,8 +146,51 @@ ipcMain.handle('ask', async (_, message: string, sessionId: number) => {
   return response;
 });
 
-ipcMain.handle('api-keys:save', async (_event, data) => {
-  return keyManager.saveApiKey(data)
+
+ipcMain.handle('load-pdf-text', async (_, pdfData: Uint8Array, filePath: string, sessionId: number) => {
+  try {
+    log.info("loading pdf")
+    
+    const fileName = filePath.split(/[\\/]/).pop() || 'document.pdf';
+    const result = await processPdfDocument(pdfData, filePath, fileName);
+    
+    if (result.isNew) {
+      log.info(`Embedded new document: ${result.chunkCount} chunks`);
+    } else {
+      log.info(`Using existing embedding: ${result.chunkCount} chunks`);
+    }
+    
+    return result.hash;
+  } catch (error) {
+    log.error('Error processing PDF:', error);
+    return null;
+  }
+});
+
+// Get list of all embedded documents
+ipcMain.handle('documents:list', async () => {
+  log.info('IPC: documents:list called')
+  const docs = getEmbeddedDocuments()
+  log.info(`IPC: returning ${docs.length} documents`)
+  return docs
+})
+
+// Switch to a different document without re-embedding
+ipcMain.handle('documents:switch', async (_, hash: string) => {
+  log.info('IPC: documents:switch called for', hash)
+  return switchToDocument(hash)
+})
+
+// Get current document hash
+ipcMain.handle('documents:current', async () => {
+  log.info('IPC: documents:current called')
+  return getCurrentDocumentId()
+})
+
+// Delete a document
+ipcMain.handle('documents:delete', async (_, hash: string) => {
+  log.info('IPC: documents:delete called for', hash)
+  return deleteEmbeddedDocument(hash)
 })
 
 ipcMain.handle('api-keys:list', async () => {

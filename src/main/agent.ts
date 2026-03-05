@@ -1,23 +1,27 @@
 import { ChatOpenAI } from "@langchain/openai";
 import { ChatOllama } from "@langchain/ollama";
+import { OllamaEmbeddings } from "@langchain/ollama";
 import { SqliteSaver } from "@langchain/langgraph-checkpoint-sqlite";
 import { createAgent, tool } from "langchain";
-import Database from "better-sqlite3";
+import { LibSQLVectorStore } from "@langchain/community/vectorstores/libsql";
+import { createClient } from "@libsql/client";
+import { RecursiveCharacterTextSplitter } from "@langchain/textsplitters";
+import { Document } from "@langchain/core/documents";
 import z from "zod";
 import { getDefaultApiKey } from "./keyManager";
+import { 
+    hashPdfData, 
+    getDocumentByHash, 
+    registerDocument, 
+    touchDocument,
+    getAllDocuments,
+    deleteDocument
+} from "./documentRegistry";
+import { db } from './db';
 import { app } from 'electron';
 import { join } from 'path';
+import log from 'electron-log';
 
-const getWeather = tool(
-    (input: { city: string }) => `It's always sunny in ${input.city}!`,
-    {
-        name: "get_weather",
-        description: "Get the weather for a given city",
-        schema: z.object({
-            city: z.string().describe("The city to get the weather for"),
-        }),
-    },
-);
 
 async function getModel() {
     const { key, model, baseUrl, provider } = await getDefaultApiKey();
@@ -46,20 +50,315 @@ async function getModel() {
 }
 
 const userDataPath = app.getPath('userData');
-const dbPath = join(userDataPath, 'app.db');
-export const db = new Database(dbPath);
+const vectorDbPath = join(userDataPath, 'vectors.db');
+
+export { db };
 export const saver = new SqliteSaver(db);
 
-export async function invokeAgent(messages: any[], config: any) {
+// nomic-embed-text produces 768-dimensional embeddings
+const EMBEDDING_DIM = 768;
+const TABLE_NAME = "pdf_vectors";
+const COLUMN_NAME = "embedding";
+
+// Create libsql client for vector store
+const libsqlClient = createClient({
+    url: `file:${vectorDbPath}`,
+});
+
+// Initialize vector store table
+async function initVectorStore() {
+    await libsqlClient.execute(`
+        CREATE TABLE IF NOT EXISTS ${TABLE_NAME} (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            content TEXT,
+            metadata TEXT,
+            ${COLUMN_NAME} F32_BLOB(${EMBEDDING_DIM})
+        )
+    `);
+    
+    await libsqlClient.execute(`
+        CREATE INDEX IF NOT EXISTS idx_${TABLE_NAME}_${COLUMN_NAME} 
+        ON ${TABLE_NAME}(libsql_vector_idx(${COLUMN_NAME}))
+    `);
+}
+
+// Initialize on module load
+initVectorStore().catch(err => log.error('Failed to init vector store:', err));
+
+const embeddings = new OllamaEmbeddings({
+  model: "nomic-embed-text:latest",
+  baseUrl: "http://localhost:11434",
+});
+
+// LibSQL vector store - persists to disk, no memory issues
+export const vectorStore = new LibSQLVectorStore(embeddings, {
+    db: libsqlClient,
+    table: TABLE_NAME,
+    column: COLUMN_NAME,
+});
+
+// Built-in text splitter from LangChain
+const textSplitter = new RecursiveCharacterTextSplitter({
+    chunkSize: 2000,
+    chunkOverlap: 200,
+});
+
+// Current document tracking
+let currentDocumentId: string | null = null;
+
+export function getCurrentDocumentId(): string | null {
+    return currentDocumentId;
+}
+
+export function setCurrentDocumentId(hash: string | null): void {
+    currentDocumentId = hash;
+    log.info(`Current document set to: ${hash ? hash.substring(0, 8) + '...' : 'null'}`);
+}
+
+/**
+ * Delete all vectors for a specific document
+ */
+async function deleteVectorsForDocument(documentId: string): Promise<void> {
+    // LibSQLVectorStore doesn't have a direct metadata filter delete
+    // We'll need to query and delete by IDs
+    try {
+        // This is a workaround - query to find matching documents
+        const results = await vectorStore.similaritySearch("test", 1000);
+        const docsToDelete = results
+            .filter((doc: Document) => doc.metadata.document_id === documentId)
+            .map((doc: Document) => doc.metadata.chunk_id as string)
+            .filter(Boolean);
+        
+        if (docsToDelete.length > 0) {
+            await vectorStore.delete({ ids: docsToDelete });
+            log.info(`Deleted ${docsToDelete.length} vectors for document ${documentId.substring(0, 8)}...`);
+        }
+    } catch (error) {
+        log.error('Error deleting vectors:', error);
+    }
+}
+
+/**
+ * Process and embed PDF with hash-based deduplication
+ */
+export async function processPdfDocument(
+    pdfData: Uint8Array, 
+    filePath: string, 
+    fileName: string
+): Promise<{ hash: string; isNew: boolean; chunkCount: number }> {
+    const hash = hashPdfData(pdfData);
+    const existingDoc = getDocumentByHash(hash);
+    
+    // Check if document already exists
+    if (existingDoc) {
+        log.info(`Document already embedded: ${fileName} (${hash.substring(0, 8)}...)`);
+        touchDocument(hash);
+        setCurrentDocumentId(hash);
+        return { hash, isNew: false, chunkCount: existingDoc.total_chunks };
+    }
+    
+    // New document - need to embed
+    log.info(`Embedding new document: ${fileName} (${hash.substring(0, 8)}...)`);
+    
+    // Extract text using PDFLoader
+    const { PDFLoader } = await import("@langchain/community/document_loaders/fs/pdf");
+    const buffer = Buffer.from(pdfData);
+    const blob = new Blob([buffer], { type: 'application/pdf' });
+    const loader = new PDFLoader(blob, { parsedItemSeparator: "" });
+    const docs = await loader.load();
+    const pages = docs.map(doc => doc.pageContent);
+    
+    // Embed pages
+    const chunkCount = await embedPagesForDocument(pages, hash);
+    
+    // Register in document registry
+    registerDocument(hash, filePath, fileName, pdfData.length, chunkCount);
+    setCurrentDocumentId(hash);
+    
+    return { hash, isNew: true, chunkCount };
+}
+
+/**
+ * Embed pages for a specific document
+ */
+async function embedPagesForDocument(pages: string[], documentId: string): Promise<number> {
+    let totalChunks = 0;
+    let chunkBuffer: Document[] = [];
+    const BATCH_SIZE = 10;
+    let globalChunkIndex = 0;
+    
+    for (let pageIndex = 0; pageIndex < pages.length; pageIndex++) {
+        const pageText = pages[pageIndex];
+        if (!pageText || pageText.trim().length === 0) continue;
+        
+        const pageChunks = await textSplitter.splitText(pageText);
+        
+        for (const chunk of pageChunks) {
+            chunkBuffer.push(new Document({
+                pageContent: chunk,
+                metadata: { 
+                    document_id: documentId,
+                    page_index: pageIndex,
+                    chunk_index: globalChunkIndex,
+                },
+            }));
+            globalChunkIndex++;
+            
+            if (chunkBuffer.length >= BATCH_SIZE) {
+                await vectorStore.addDocuments(chunkBuffer);
+                totalChunks += chunkBuffer.length;
+                chunkBuffer = [];
+            }
+        }
+        
+        if ((pageIndex + 1) % 100 === 0) {
+            log.info(`Processed ${pageIndex + 1}/${pages.length} pages (${totalChunks} chunks)`);
+        }
+    }
+    
+    // Final batch
+    if (chunkBuffer.length > 0) {
+        await vectorStore.addDocuments(chunkBuffer);
+        totalChunks += chunkBuffer.length;
+    }
+    
+    log.info(`Finished embedding: ${totalChunks} total chunks`);
+    return totalChunks;
+}
+
+/**
+ * Switch current document without re-embedding
+ */
+export function switchToDocument(hash: string): boolean {
+    const doc = getDocumentByHash(hash);
+    if (!doc) {
+        log.error(`Document not found: ${hash}`);
+        return false;
+    }
+    
+    touchDocument(hash);
+    setCurrentDocumentId(hash);
+    return true;
+}
+
+/**
+ * Get list of all embedded documents
+ */
+export function getEmbeddedDocuments() {
+    return getAllDocuments();
+}
+
+/**
+ * Delete a document and its vectors
+ */
+export async function deleteEmbeddedDocument(hash: string): Promise<boolean> {
+    try {
+        await deleteVectorsForDocument(hash);
+        deleteDocument(hash);
+        if (currentDocumentId === hash) {
+            currentDocumentId = null;
+        }
+        return true;
+    } catch (error) {
+        log.error('Error deleting document:', error);
+        return false;
+    }
+}
+
+/**
+ * Search current document only
+ */
+async function searchCurrentDocument(query: string, k: number = 5): Promise<string> {
+    if (!currentDocumentId) {
+        return "No document is currently open.";
+    }
+    
+    try {
+        // Search all then filter by current document
+        const results = await vectorStore.similaritySearch(query, k * 3);
+        const filtered = results.filter((doc: Document) => 
+            doc.metadata.document_id === currentDocumentId
+        ).slice(0, k);
+        
+        if (filtered.length === 0) {
+            return "No relevant content found in the current document.";
+        }
+        
+        return filtered.map(doc => doc.pageContent).join('\n\n');
+    } catch (error) {
+        log.error('Error searching current document:', error);
+        return 'Error searching document.';
+    }
+}
+
+/**
+ * Search all documents
+ */
+async function searchAllDocuments(query: string, k: number = 5): Promise<string> {
+    try {
+        const results = await vectorStore.similaritySearch(query, k);
+        
+        if (results.length === 0) {
+            return "No relevant content found in any document.";
+        }
+        
+        return results.map(doc => {
+            const source = doc.metadata.document_id 
+                ? `[From: ${doc.metadata.document_id.substring(0, 8)}...]\n` 
+                : '';
+            return source + doc.pageContent;
+        }).join('\n\n');
+    } catch (error) {
+        log.error('Error searching all documents:', error);
+        return 'Error searching documents.';
+    }
+}
+
+// Tool: Search current document
+const searchCurrentDocTool = tool(
+    async (input: { query: string }) => {
+        const context = await searchCurrentDocument(input.query, 5);
+        return context;
+    },
+    {
+        name: "search_current",
+        description: "Search ONLY the currently open PDF document for relevant information. Use this as the PRIMARY tool when the user asks about the document they're currently viewing.",
+        schema: z.object({
+            query: z.string().describe("The search query to find relevant content in the current document"),
+        }),
+    },
+);
+
+// Tool: Search all documents
+const searchAllDocsTool = tool(
+    async (input: { query: string }) => {
+        const context = await searchAllDocuments(input.query, 5);
+        return context;
+    },
+    {
+        name: "search_all",
+        description: "Search ALL embedded PDF documents in the library for relevant information. Use this when the user asks about documents they've viewed before, wants to compare documents, or needs information that might be in other files. Results will indicate which document each result came from.",
+        schema: z.object({
+            query: z.string().describe("The search query to find relevant content across all documents"),
+        }),
+    },
+);
+
+export async function invokeAgent(messages: Array<{role: string; content: string}>, config: {configurable?: {thread_id?: string}}) {
     const model = await getModel();
     
     const agent = createAgent({
         model,
-        tools: [getWeather],
-        systemPrompt: "You are a helpful assistant.",
+        tools: [searchCurrentDocTool, searchAllDocsTool],
+        systemPrompt: `You are a helpful AI assistant with access to the user's PDF document library.
+
+When the user asks about "this document" or "the current document", use the 'search_current' tool to search only the currently open PDF.
+
+When the user asks about "other documents", "all my files", "previous papers", or anything suggesting a broader search, use the 'search_all' tool to search across the entire document library.
+
+The search results will include document identifiers when searching all documents. Use these to reference which file information came from.`,
         checkpointer: saver,
     });
 
-    console.log(messages)
-    return (agent as any).invoke({ messages }, config);
+    return (agent as {invoke: (params: unknown, config: unknown) => Promise<unknown>}).invoke({ messages }, config);
 }
