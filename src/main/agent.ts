@@ -98,9 +98,10 @@ export const vectorStore = new LibSQLVectorStore(embeddings, {
 });
 
 // Text splitter - sized for all-minilm's 256-token context (~500 chars)
+// We use 400 as a safe upper bound since some characters map to multiple tokens.
 const textSplitter = new RecursiveCharacterTextSplitter({
-    chunkSize: 500,
-    chunkOverlap: 50,
+    chunkSize: 400,
+    chunkOverlap: 40,
 });
 
 // Current document tracking
@@ -213,9 +214,19 @@ async function embedPagesForDocument(pages: string[], documentId: string, onProg
     let completedChunks = 0;
     for (let i = 0; i < allChunks.length; i += BATCH_SIZE) {
         const batch = allChunks.slice(i, i + BATCH_SIZE);
-        await vectorStore.addDocuments(batch);
-        completedChunks += batch.length;
-        log.info(`Embedded ${completedChunks}/${allChunks.length} chunks`);
+        try {
+            log.info(`Embedding batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(allChunks.length / BATCH_SIZE)} (${batch.length} chunks)`);
+            await vectorStore.addDocuments(batch);
+            completedChunks += batch.length;
+            log.info(`Embedded ${completedChunks}/${allChunks.length} chunks`);
+        } catch (error) {
+            log.error(`Failed to embed batch starting at chunk ${i}. Error:`, error);
+            // If a batch fails, try smaller units or log the content length
+            for (const doc of batch) {
+                log.error(`Chunk length: ${doc.pageContent.length}, content snippet: ${doc.pageContent.substring(0, 50)}...`);
+            }
+            throw error; // Re-throw to inform the caller
+        }
 
         if (onProgress) {
             const progressPercentage = Math.round((completedChunks / allChunks.length) * 100);
@@ -315,6 +326,47 @@ async function searchAllDocuments(query: string, k: number = 15): Promise<string
     }
 }
 
+/**
+ * Search documents in the current directory and its subdirectories
+ */
+async function searchDirectoryDocuments(query: string, currentPath: string, k: number = 15): Promise<string> {
+    if (!currentPath) {
+        return "No directory path provided. Please use the global search tool if you intended to search all directories.";
+    }
+
+    try {
+        // Search more broadly to ensure we get enough results after filtering by directory
+        const results = await vectorStore.similaritySearch(query, k * 5);
+
+        // Get all documents that fall under the currentPath
+        const allDocs = getAllDocuments();
+        const validDocIds = new Set(
+            allDocs
+                .filter(d => d.file_path && d.file_path.startsWith(currentPath))
+                .map(d => d.id)
+        );
+
+        const filtered = results.filter((doc: Document) =>
+            validDocIds.has(doc.metadata.document_id as string)
+        ).slice(0, k);
+
+        if (filtered.length === 0) {
+            return `No relevant content found in the current directory (${currentPath}) or its subdirectories.`;
+        }
+
+        return filtered.map(doc => {
+            const docInfo = allDocs.find(d => d.id === doc.metadata.document_id);
+            const source = docInfo
+                ? `[From: ${docInfo.file_name}]\n`
+                : (doc.metadata.document_id ? `[From: ${doc.metadata.document_id.substring(0, 8)}...]\n` : '');
+            return source + doc.pageContent;
+        }).join('\n\n');
+    } catch (error) {
+        log.error('Error searching directory documents:', error);
+        return 'Error searching directory documents.';
+    }
+}
+
 // Tool: Search current document
 const searchCurrentDocTool = tool(
     async (input: { query: string }) => {
@@ -332,32 +384,52 @@ const searchCurrentDocTool = tool(
 
 // Tool: Search all documents
 const searchAllDocsTool = tool(
-    async (input: { query: string }) => {
+    async (input: { query: string, request_permission: boolean }) => {
+        if (!input.request_permission) {
+            return "ACCESS DENIED: You must request permission from the user before searching outside their current folder. Stop and ask the user if they want to search all folders.";
+        }
         const context = await searchAllDocuments(input.query, 15);
         return context;
     },
     {
         name: "search_all",
-        description: "Search ALL embedded PDF documents in the library for relevant information. Use this when the user asks about documents they've viewed before, wants to compare documents, or needs information that might be in other files. Results will indicate which document each result came from.",
+        description: "Search ALL embedded PDF documents in the library globally. CRITICAL: You MUST ask the user for permission before using this tool. Only set request_permission to true IF the user explicitly said yes to searching all folders.",
         schema: z.object({
             query: z.string().describe("The search query to find relevant content across all documents"),
+            request_permission: z.boolean().describe("Must be true only if the user explicitly granted permission to search globally.")
         }),
     },
 );
 
-export async function invokeAgent(messages: Array<{ role: string; content: string }>, config: { configurable?: { thread_id?: string } }, onChunk?: (chunk: string) => void, onToolCall?: (toolCall: any) => void) {
+export async function invokeAgent(messages: Array<{ role: string; content: string }>, config: { configurable?: { thread_id?: string } }, currentPath?: string, onChunk?: (chunk: string) => void, onToolCall?: (toolCall: any) => void) {
     const model = await getModel();
+
+    // Tool: Search directory documents (instantiated here so it can capture currentPath)
+    const searchDirTool = tool(
+        async (input: { query: string }) => {
+            const context = await searchDirectoryDocuments(input.query, currentPath || "", 15);
+            return context;
+        },
+        {
+            name: "search_directory",
+            description: "Search ONLY the documents in the user's current folder and its subfolders. Use this as your default and primary search mechanism for any general questions unless otherwise specified.",
+            schema: z.object({
+                query: z.string().describe("The search query"),
+            }),
+        },
+    );
 
     const agent = createAgent({
         model,
-        tools: [searchCurrentDocTool, searchAllDocsTool],
+        tools: [searchCurrentDocTool, searchDirTool, searchAllDocsTool],
         systemPrompt: `You are a helpful AI assistant with access to the user's PDF document library.
 
-When the user asks about "this document" or "the current document", use the 'search_current' tool to search only the currently open PDF.
+You have three retrieval tools, use them according to these STRICT rules:
+1. When the user asks about "this document" or "the current document", use the 'search_current' tool to search only the currently open PDF.
+2. By DEFAULT, for ANY general question about their files, use the 'search_directory' tool. This restricts your search to the user's active folder context.
+3. If you cannot find what you're looking for, or if the user explicitly asks to search "all my files" or " everywhere", you MUST ASK FOR PERMISSION FIRST before using the 'search_all' tool. Once they say "yes" or give explicit consent, use 'search_all' with request_permission: true.
 
-When the user asks about "other documents", "all my files", "previous papers", or anything suggesting a broader search, use the 'search_all' tool to search across the entire document library.
-
-The search results will include document identifiers when searching all documents. Use these to reference which file information came from.`,
+The search results will include document identifiers. Use these to reference which file information came from.`,
         checkpointer: saver,
     });
 

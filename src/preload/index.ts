@@ -53,7 +53,7 @@ const api = {
         ipcRenderer.invoke("clear-messages", sessionId),
     deleteSession: (sessionId: number): Promise<boolean> =>
         ipcRenderer.invoke("delete-session", sessionId),
-    ask: (message: string, sessionId: number) => ipcRenderer.invoke("ask", message, sessionId),
+    ask: (message: string, sessionId: number, currentPath: string) => ipcRenderer.invoke("ask", message, sessionId, currentPath),
     onAgentChunk: (callback: (chunk: string) => void) => {
         const handler = (_event: any, chunk: string) => callback(chunk);
         ipcRenderer.on('agent:chunk', handler);
@@ -68,6 +68,28 @@ const api = {
         const handler = (_event: any, progress: number) => callback(progress);
         ipcRenderer.on('embedding:progress', handler);
         return () => ipcRenderer.removeListener('embedding:progress', handler);
+    },
+    embedDirectoryPdfs: (dirPath: string): Promise<any> =>
+        ipcRenderer.invoke("embed-directory-pdfs", dirPath),
+    onBatchEmbeddingFileStart: (callback: (data: any) => void) => {
+        const handler = (_event: any, data: any) => callback(data);
+        ipcRenderer.on('batch-embedding:file-start', handler);
+        return () => ipcRenderer.removeListener('batch-embedding:file-start', handler);
+    },
+    onBatchEmbeddingFileProgress: (callback: (data: any) => void) => {
+        const handler = (_event: any, data: any) => callback(data);
+        ipcRenderer.on('batch-embedding:file-progress', handler);
+        return () => ipcRenderer.removeListener('batch-embedding:file-progress', handler);
+    },
+    onBatchEmbeddingFileDone: (callback: (data: any) => void) => {
+        const handler = (_event: any, data: any) => callback(data);
+        ipcRenderer.on('batch-embedding:file-done', handler);
+        return () => ipcRenderer.removeListener('batch-embedding:file-done', handler);
+    },
+    onBatchEmbeddingDone: (callback: (data: any) => void) => {
+        const handler = (_event: any, data: any) => callback(data);
+        ipcRenderer.on('batch-embedding:done', handler);
+        return () => ipcRenderer.removeListener('batch-embedding:done', handler);
     },
     loadPdfText: (pdfData: Uint8Array, filePath: string, sessionId: number): Promise<string | null> =>
         ipcRenderer.invoke("load-pdf-text", pdfData, filePath, sessionId),

@@ -158,7 +158,7 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
         if (sessionId) {
             window.electronAPI.addMessage(sessionId, "user", fullMessage).then(async () => {
                 const msgCountBefore = await loadMessages();
-                window.electronAPI.ask(fullMessage, sessionId).then(async (response) => {
+                window.electronAPI.ask(fullMessage, sessionId, currentPath).then(async (response) => {
                     // Once ask resolves, save final messages to DB
                     if (response && Array.isArray(response.messages) && response.messages.length > 0) {
                         const newMessages = response.messages.slice(msgCountBefore);

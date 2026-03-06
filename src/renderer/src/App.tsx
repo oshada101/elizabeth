@@ -27,10 +27,15 @@ declare global {
             ) => Promise<number>;
             clearMessages: (sessionId: number) => Promise<void>;
             deleteSession: (sessionId: number) => Promise<boolean>;
-            ask: (message: string, sessionId: number) => Promise<any>;
+            ask: (message: string, sessionId: number, currentPath: string) => Promise<any>;
             onAgentChunk: (callback: (chunk: string) => void) => () => void;
             onAgentTool: (callback: (toolCall: any) => void) => () => void;
             onEmbeddingProgress: (callback: (progress: number) => void) => () => void;
+            embedDirectoryPdfs: (dirPath: string) => Promise<any>;
+            onBatchEmbeddingFileStart: (callback: (data: any) => void) => () => void;
+            onBatchEmbeddingFileProgress: (callback: (data: any) => void) => () => void;
+            onBatchEmbeddingFileDone: (callback: (data: any) => void) => () => void;
+            onBatchEmbeddingDone: (callback: (data: any) => void) => () => void;
             loadPdfText: (pdfData: Uint8Array, filePath: string, sessionId: number) => Promise<string | null>;
             documents: {
                 list: () => Promise<Array<{ id: string, file_name: string, file_path: string, total_chunks: number, last_accessed: string }>>;
@@ -112,6 +117,15 @@ function App() {
     const [isEmbedding, setIsEmbedding] = useState(false);
     const [embeddingProgress, setEmbeddingProgress] = useState(0);
 
+    // Batch embedding state
+    const [batchEmbedding, setBatchEmbedding] = useState(false);
+    const [batchProgress, setBatchProgress] = useState<{
+        fileName: string;
+        fileIndex: number;
+        totalFiles: number;
+        fileProgress: number;
+    } | null>(null);
+
     useEffect(() => {
         const initHomeDir = async () => {
             const defaultDir = await window.electronAPI.fs.getDefaultDir();
@@ -151,21 +165,53 @@ function App() {
         return () => removeProgressListener();
     }, []);
 
-    // Load documents list on mount and when pdfData changes
     useEffect(() => {
-        const loadDocuments = async () => {
-            try {
-                console.log('Loading documents list...');
-                const docs = await window.electronAPI.documents.list();
-                console.log('Documents loaded:', docs.length);
-                setDocuments(docs);
-                const current = await window.electronAPI.documents.current();
-                console.log('Current document:', current);
-                setCurrentDocId(current);
-            } catch (error) {
-                console.error('Error loading documents:', error);
-            }
-        };
+        const unsubs = [
+            window.electronAPI.onBatchEmbeddingFileStart((data) => {
+                setBatchProgress({
+                    fileName: data.fileName,
+                    fileIndex: data.fileIndex,
+                    totalFiles: data.totalFiles,
+                    fileProgress: 0
+                });
+            }),
+            window.electronAPI.onBatchEmbeddingFileProgress((data) => {
+                setBatchProgress(prev => prev ? {
+                    ...prev,
+                    fileProgress: data.progress,
+                    fileIndex: data.fileIndex,
+                    totalFiles: data.totalFiles,
+                    fileName: data.fileName
+                } : null);
+            }),
+            window.electronAPI.onBatchEmbeddingFileDone((data) => {
+                loadDocuments();
+            }),
+            window.electronAPI.onBatchEmbeddingDone((data) => {
+                setBatchEmbedding(false);
+                setBatchProgress(null);
+            })
+        ];
+
+        return () => unsubs.forEach(unsub => unsub());
+    }, []);
+
+    const loadDocuments = async () => {
+        try {
+            console.log('Loading documents list...');
+            const docs = await window.electronAPI.documents.list();
+            console.log('Documents loaded:', docs.length);
+            setDocuments(docs);
+            const current = await window.electronAPI.documents.current();
+            console.log('Current document:', current);
+            setCurrentDocId(current);
+        } catch (error) {
+            console.error('Failed to load documents list:', error);
+        }
+    };
+
+    // Load documents list on mount
+    useEffect(() => {
         loadDocuments();
     }, []); // Load once on mount
 
@@ -242,6 +288,18 @@ function App() {
     const handleFileExplorerNavigate = useCallback((path: string) => {
         setCurrentPath(path);
     }, []);
+
+    const handleEmbedAll = useCallback(async () => {
+        if (!currentPath || batchEmbedding) return;
+        setBatchEmbedding(true);
+        try {
+            await window.electronAPI.embedDirectoryPdfs(currentPath);
+        } catch (error) {
+            console.error("Failed to start batch embedding:", error);
+            setBatchEmbedding(false);
+            setBatchProgress(null);
+        }
+    }, [currentPath, batchEmbedding]);
 
     const handleNewSession = useCallback(async () => {
         try {
@@ -485,6 +543,9 @@ function App() {
                                 currentPath={currentPath || ""}
                                 onNavigate={handleFileExplorerNavigate}
                                 onFileClick={handleFileClick}
+                                onEmbedAll={handleEmbedAll}
+                                batchEmbedding={batchEmbedding}
+                                batchProgress={batchProgress}
                             />
                         </div>
                         {/* Unified Panel - 40% */}
@@ -552,16 +613,16 @@ function App() {
                                         </button>
                                     </div>
                                     {/* Progress Bar */}
-                                    {isEmbedding && (
+                                    {(isEmbedding || (batchEmbedding && batchProgress?.fileName === fileName)) && (
                                         <div className="mt-2">
                                             <div className="flex items-center justify-between text-xs text-purple-300 mb-1">
                                                 <span>Embedding document...</span>
-                                                <span>{embeddingProgress}%</span>
+                                                <span>{isEmbedding ? embeddingProgress : (batchProgress?.fileProgress || 0)}%</span>
                                             </div>
                                             <div className="h-1.5 bg-white/10 rounded-full overflow-hidden">
                                                 <div
                                                     className="h-full bg-purple-500 rounded-full transition-all duration-300"
-                                                    style={{ width: `${embeddingProgress}%` }}
+                                                    style={{ width: `${isEmbedding ? embeddingProgress : (batchProgress?.fileProgress || 0)}%` }}
                                                 />
                                             </div>
                                         </div>
@@ -601,8 +662,8 @@ function App() {
                                     setViewMode("explorer");
                                     setSelectedFile(null);
                                 }}
-                                isEmbedding={isEmbedding}
-                                embeddingProgress={embeddingProgress}
+                                isEmbedding={isEmbedding || (batchEmbedding && batchProgress?.fileName === fileName)}
+                                embeddingProgress={isEmbedding ? embeddingProgress : (batchProgress?.fileProgress || 0)}
                             />
                         </div>
                     </>
@@ -618,11 +679,41 @@ function App() {
                             <div className="p-4 border-b border-white/10">
                                 <h3 className="text-lg font-semibold text-purple-200">Documents</h3>
                                 <p className="text-xs text-purple-400/70 mt-1">
-                                    {documents.length} document{documents.length !== 1 ? 's' : ''} embedded
+                                    {documents.filter(doc => currentPath && doc.file_path && doc.file_path.startsWith(currentPath)).length} document{documents.filter(doc => currentPath && doc.file_path && doc.file_path.startsWith(currentPath)).length !== 1 ? 's' : ''} in folder
                                 </p>
                             </div>
                             <div className="flex-1 overflow-y-auto p-2 space-y-2">
-                                {documents.map((doc) => (
+                                {batchEmbedding && batchProgress && (
+                                    <div className="w-full p-3 rounded-xl bg-white/5 border border-purple-500/30">
+                                        <div className="flex items-start gap-3">
+                                            <div className="relative">
+                                                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-purple-400 mt-0.5 opacity-50" viewBox="0 0 20 20" fill="currentColor">
+                                                    <path fillRule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4z" clipRule="evenodd" />
+                                                </svg>
+                                                <div className="absolute -bottom-1 -right-1 w-3 h-3 bg-purple-500 rounded-full animate-ping opacity-75"></div>
+                                                <div className="absolute -bottom-1 -right-1 w-3 h-3 bg-purple-500 rounded-full"></div>
+                                            </div>
+                                            <div className="flex-1 min-w-0">
+                                                <div className="flex items-center justify-between">
+                                                    <p className="text-sm font-medium text-purple-200 truncate">
+                                                        {batchProgress.fileName}
+                                                    </p>
+                                                    <span className="text-xs text-purple-400 ml-2">Loading</span>
+                                                </div>
+                                                <p className="text-xs text-purple-400/70 truncate mt-0.5">
+                                                    Embedding document...
+                                                </p>
+                                                <div className="mt-2 h-1 bg-white/10 rounded-full overflow-hidden">
+                                                    <div
+                                                        className="h-full bg-purple-500 rounded-full transition-all duration-300"
+                                                        style={{ width: `${Math.min(99, Math.max(0, batchProgress.fileProgress))}%` }}
+                                                    />
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+                                {documents.filter(doc => currentPath && doc.file_path && doc.file_path.startsWith(currentPath)).map((doc) => (
                                     <button
                                         key={doc.id}
                                         onClick={() => handleSwitchDocument(doc.id)}

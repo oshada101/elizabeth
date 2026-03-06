@@ -12,9 +12,17 @@ interface FileExplorerProps {
     onFileClick: (file: FileEntry) => void;
     onNavigate: (path: string) => void;
     currentPath: string;
+    onEmbedAll?: () => void;
+    batchEmbedding?: boolean;
+    batchProgress?: {
+        fileName: string;
+        fileIndex: number;
+        totalFiles: number;
+        fileProgress: number;
+    } | null;
 }
 
-export default function FileExplorer({ onFileClick, onNavigate, currentPath }: FileExplorerProps) {
+export default function FileExplorer({ onFileClick, onNavigate, currentPath, onEmbedAll, batchEmbedding, batchProgress }: FileExplorerProps) {
     const [files, setFiles] = useState<FileEntry[]>([]);
     const [loading, setLoading] = useState(true);
     const [viewMode, setViewMode] = useState<"list" | "grid">("list");
@@ -131,7 +139,19 @@ export default function FileExplorer({ onFileClick, onNavigate, currentPath }: F
                         </div>
                     ))}
                 </div>
-                <div className="ml-auto flex-shrink-0">
+                <div className="ml-auto flex items-center gap-1 flex-shrink-0">
+                    <button
+                        onClick={onEmbedAll}
+                        disabled={batchEmbedding}
+                        className={`p-2 rounded-lg transition-colors flex items-center gap-2 text-sm ${batchEmbedding ? "bg-purple-500/20 text-purple-300 opacity-50 cursor-not-allowed" : "hover:bg-purple-500/20 text-purple-300 hover:text-purple-200"}`}
+                        title="Embed all PDFs in this directory"
+                    >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2" />
+                        </svg>
+                        <span className="hidden sm:inline">{batchEmbedding ? "Embedding..." : "Embed All"}</span>
+                    </button>
+                    <div className="w-px h-5 bg-white/10 mx-1"></div>
                     <button
                         onClick={() => setViewMode(viewMode === "list" ? "grid" : "list")}
                         className="p-2 rounded-lg hover:bg-white/10 text-purple-300 hover:text-white transition-colors"
@@ -149,6 +169,29 @@ export default function FileExplorer({ onFileClick, onNavigate, currentPath }: F
                     </button>
                 </div>
             </div>
+
+            {/* Batch Progress Bar */}
+            {batchEmbedding && batchProgress && (
+                <div className="px-4 py-3 bg-purple-500/10 border-b border-white/10">
+                    <div className="flex items-center justify-between text-xs text-purple-200 mb-2">
+                        <div className="flex items-center gap-2 truncate">
+                            <span className="font-medium bg-purple-500/30 px-2 py-0.5 rounded">
+                                {batchProgress.fileIndex + 1} / {batchProgress.totalFiles}
+                            </span>
+                            <span className="truncate max-w-[200px] text-purple-300">
+                                {batchProgress.fileName}
+                            </span>
+                        </div>
+                        <span className="flex-shrink-0 font-medium">{batchProgress.fileProgress}%</span>
+                    </div>
+                    <div className="h-1.5 bg-white/10 rounded-full overflow-hidden">
+                        <div
+                            className="h-full bg-purple-500 rounded-full transition-all duration-300"
+                            style={{ width: `${batchProgress.fileProgress}%` }}
+                        />
+                    </div>
+                </div>
+            )}
 
             {/* File List */}
             <div className="flex-1 overflow-auto p-4">

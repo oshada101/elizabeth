@@ -1,6 +1,6 @@
 import { app, BrowserWindow, ipcMain, dialog } from 'electron'
 import { join, dirname } from 'path'
-import { existsSync, readdirSync, statSync } from 'fs'
+import { existsSync, readdirSync, statSync, readFileSync } from 'fs'
 import { homedir } from 'os'
 import log from 'electron-log'
 import { db as appDb } from './db'
@@ -152,14 +152,15 @@ ipcMain.handle('delete-session', (_event, sessionId: number) => {
   }
 })
 
-ipcMain.handle('ask', async (event, message: string, sessionId: number) => {
+ipcMain.handle('ask', async (event, message: string, sessionId: number, currentPath: string) => {
   const response = await invokeAgent(
     [{ role: 'user', content: message }],
     { configurable: { thread_id: `session_${sessionId}` } },
-    (chunk) => {
+    currentPath,
+    (chunk: string) => {
       event.sender.send('agent:chunk', chunk);
     },
-    (toolCall) => {
+    (toolCall: any) => {
       event.sender.send('agent:tool', toolCall);
     }
   );
@@ -188,6 +189,95 @@ ipcMain.handle('load-pdf-text', async (event, pdfData: Uint8Array, filePath: str
     return null;
   }
 });
+
+// Recursively find all PDF files in a directory
+function findPdfsRecursive(dirPath: string): string[] {
+  const pdfs: string[] = []
+  try {
+    const entries = readdirSync(dirPath, { withFileTypes: true })
+    for (const entry of entries) {
+      const fullPath = join(dirPath, entry.name)
+      if (entry.isDirectory()) {
+        pdfs.push(...findPdfsRecursive(fullPath))
+      } else if (entry.name.toLowerCase().endsWith('.pdf')) {
+        pdfs.push(fullPath)
+      }
+    }
+  } catch (error) {
+    log.error('Error scanning directory for PDFs:', dirPath, error)
+  }
+  return pdfs
+}
+
+// Batch embed all PDFs in a directory
+ipcMain.handle('embed-directory-pdfs', async (event, dirPath: string) => {
+  try {
+    log.info('Batch embedding PDFs from:', dirPath)
+    const pdfPaths = findPdfsRecursive(dirPath)
+    log.info(`Found ${pdfPaths.length} PDFs to embed`)
+
+    if (pdfPaths.length === 0) {
+      event.sender.send('batch-embedding:done', { totalFiles: 0 })
+      return { totalFiles: 0 }
+    }
+
+    for (let i = 0; i < pdfPaths.length; i++) {
+      const filePath = pdfPaths[i]
+      const fileName = filePath.split(/[\\/]/).pop() || 'document.pdf'
+
+      event.sender.send('batch-embedding:file-start', {
+        fileName,
+        filePath,
+        fileIndex: i,
+        totalFiles: pdfPaths.length
+      })
+
+      try {
+        const pdfData = readFileSync(filePath)
+        const result = await processPdfDocument(
+          new Uint8Array(pdfData),
+          filePath,
+          fileName,
+          (progress: number) => {
+            event.sender.send('batch-embedding:file-progress', {
+              fileName,
+              progress,
+              fileIndex: i,
+              totalFiles: pdfPaths.length
+            })
+          }
+        )
+
+        event.sender.send('batch-embedding:file-done', {
+          fileName,
+          hash: result.hash,
+          isNew: result.isNew,
+          chunkCount: result.chunkCount,
+          fileIndex: i,
+          totalFiles: pdfPaths.length
+        })
+      } catch (error) {
+        log.error(`Error embedding ${fileName}:`, error)
+        event.sender.send('batch-embedding:file-done', {
+          fileName,
+          hash: null,
+          isNew: false,
+          chunkCount: 0,
+          fileIndex: i,
+          totalFiles: pdfPaths.length,
+          error: true
+        })
+      }
+    }
+
+    event.sender.send('batch-embedding:done', { totalFiles: pdfPaths.length })
+    return { totalFiles: pdfPaths.length }
+  } catch (error) {
+    log.error('Error in batch embedding:', error)
+    event.sender.send('batch-embedding:done', { totalFiles: 0, error: true })
+    return { totalFiles: 0, error: true }
+  }
+})
 
 // Get list of all embedded documents
 ipcMain.handle('documents:list', async () => {
