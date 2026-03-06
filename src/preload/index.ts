@@ -23,6 +23,14 @@ export interface DocumentInfo {
     last_accessed: string;
 }
 
+export interface FileEntry {
+    name: string;
+    path: string;
+    isDirectory: boolean;
+    size: number;
+    modified: string;
+}
+
 const api = {
     openFileDialog: (): Promise<string | null> =>
         ipcRenderer.invoke("open-file-dialog"),
@@ -51,6 +59,13 @@ const api = {
         switch: (hash: string): Promise<boolean> => ipcRenderer.invoke("documents:switch", hash),
         current: (): Promise<string | null> => ipcRenderer.invoke("documents:current"),
         delete: (hash: string): Promise<boolean> => ipcRenderer.invoke("documents:delete", hash),
+    },
+    fs: {
+        getHomeDir: (): Promise<string> => ipcRenderer.invoke("fs:get-home-dir"),
+        getDefaultDir: (): Promise<string> => ipcRenderer.invoke("fs:get-default-dir"),
+        readDir: (dirPath: string): Promise<FileEntry[] | null> => ipcRenderer.invoke("fs:read-dir", dirPath),
+        getParentDir: (dirPath: string): Promise<string | null> => ipcRenderer.invoke("fs:get-parent-dir", dirPath),
+        exists: (filePath: string): Promise<boolean> => ipcRenderer.invoke("fs:exists", filePath),
     },
     windowMinimize: () => ipcRenderer.invoke("window-minimize"),
     windowMaximize: () => ipcRenderer.invoke("window-maximize"),

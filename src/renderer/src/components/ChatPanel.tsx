@@ -36,9 +36,14 @@ function ChatPanel({
     const loadMessages = async () => {
         if (!sessionId) return;
         const msgs = await window.electronAPI.getMessages(sessionId);
-        setMessages(msgs);
-        console.log(msgs);
-        return msgs.length > 0 ? msgs.length - 1 : 0;
+        // Ensure all message content is string
+        const sanitizedMsgs = msgs.map((msg: Message) => ({
+            ...msg,
+            content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)
+        }));
+        setMessages(sanitizedMsgs);
+        console.log('[Chat] Loaded messages:', sanitizedMsgs);
+        return sanitizedMsgs.length > 0 ? sanitizedMsgs.length - 1 : 0;
     };
 
     const handleSendMessage = useCallback(async () => {
@@ -56,20 +61,40 @@ function ChatPanel({
         const userMsgIndex = await loadMessages();
 
         setIsTyping(true);
+        console.log(`[Agent] Sending message to agent: "${fullMessage.substring(0, 50)}${fullMessage.length > 50 ? '...' : ''}"`);
         const response = await window.electronAPI.ask(fullMessage, sessionId);
-        console.log(response);
+        console.log('[Agent] Raw response:', response);
         setIsTyping(false);
+
+        // Handle response structure safely
+        if (!response || !Array.isArray(response.messages)) {
+            console.error('[Agent] Invalid response structure:', response);
+            await window.electronAPI.addMessage(
+                sessionId,
+                'assistant',
+                'Error: Invalid response from AI agent. Please try again.'
+            );
+            await loadMessages();
+            return;
+        }
 
         const messagesAfterUser =
             userMsgIndex !== -1 ? response.messages.slice(userMsgIndex + 1) : [];
 
         const aiMessages = messagesAfterUser;
 
-        console.log(aiMessages);
+        console.log('[Agent] AI messages to process:', aiMessages);
 
         for (const msg of aiMessages) {
-                const role = msg.type === 'tool' ? 'tool' : 'assistant';
-                const content = msg.type === 'tool' ? msg.name : msg.content;
+            const role = msg.type === 'tool' ? 'tool' : 'assistant';
+            // Ensure content is always a string - handle objects
+            let content: string;
+            if (msg.type === 'tool') {
+                content = typeof msg.name === 'string' ? msg.name : JSON.stringify(msg.name);
+            } else {
+                content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
+            }
+            console.log(`[Agent] Adding ${role} message:`, content.substring(0, 100));
             await window.electronAPI.addMessage(
                 sessionId,
                 role,
@@ -170,15 +195,18 @@ function ChatPanel({
                     </div>
                 ) : (
                     messages.map((msg) => {
+                        // Ensure msg.content is a string
+                        const contentStr = typeof msg.content === 'string' ? msg.content : String(msg.content);
+
                         if(msg.role === 'tool') {
                             return (
-                                <div className="flex">
-                                    <p className=" bg-primary-500/15 text-primary-200 border border-primary-500/15 px-3 py-1.5 rounded-xl text-xs backdrop-blur-sm ">tool called: {msg.content}</p>
+                                <div key={msg.id} className="flex">
+                                    <p className=" bg-primary-500/15 text-primary-200 border border-primary-500/15 px-3 py-1.5 rounded-xl text-xs backdrop-blur-sm ">tool called: {contentStr}</p>
                                 </div>
                             )
                         }
                         const { mainText, attachedText } = parseMessage(
-                            msg.content,
+                            contentStr,
                         );
                         return (
                             <div

@@ -7,8 +7,8 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjsLib.vers
 
 interface PDFViewerProps {
     pdfData: Uint8Array | null;
-    onFileOpen: () => void;
-    onFileDrop: (file: File) => void;
+    onFileOpen?: () => void;
+    onFileDrop?: (file: File) => void;
     onTextSelect?: (text: string) => void;
     fileName?: string;
     navigateToPage?: number;
@@ -330,7 +330,7 @@ useEffect(() => {
             e.preventDefault();
             setIsDragging(false);
             const file = e.dataTransfer.files[0];
-            if (file) onFileDrop(file);
+            if (file && onFileDrop) onFileDrop(file);
         },
         [onFileDrop],
     );

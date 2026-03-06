@@ -1,8 +1,10 @@
 import { useState, useEffect, useCallback } from "react";
 import PDFViewer from "./components/PDFViewer";
-import ChatPanel from "./components/ChatPanel";
 import TOCPanel from "./components/TOCPanel";
 import SettingsModal from "./components/SettingsModal";
+import FileExplorer from "./components/FileExplorer";
+import FileViewer from "./components/FileViewer";
+import UnifiedPanel from "./components/UnifiedPanel";
 import React from "react";
 import * as pdfjsLib from "pdfjs-dist";
 
@@ -31,6 +33,13 @@ declare global {
                 switch: (hash: string) => Promise<boolean>;
                 current: () => Promise<string | null>;
                 delete: (hash: string) => Promise<boolean>;
+            };
+            fs: {
+                getHomeDir: () => Promise<string>;
+                getDefaultDir: () => Promise<string>;
+                readDir: (dirPath: string) => Promise<Array<{name: string, path: string, isDirectory: boolean, size: number, modified: string}>>;
+                getParentDir: (dirPath: string) => Promise<string | null>;
+                exists: (filePath: string) => Promise<boolean>;
             };
             windowMinimize: () => Promise<void>;
             windowMaximize: () => Promise<void>;
@@ -69,15 +78,17 @@ interface DocumentInfo {
     last_accessed: string;
 }
 
-interface DocumentInfo {
-    id: string;
-    file_name: string;
-    file_path: string;
-    total_chunks: number;
-    last_accessed: string;
+interface FileEntry {
+    name: string;
+    path: string;
+    isDirectory: boolean;
+    size: number;
+    modified: string;
 }
 
 function App() {
+    const [currentPath, setCurrentPath] = useState<string | null>(null);
+    const [selectedFile, setSelectedFile] = useState<FileEntry | null>(null);
     const [pdfPath, setPdfPath] = useState<string | null>(null);
     const [pdfData, setPdfData] = useState<Uint8Array | null>(null);
     const [pdfText, setPdfText] = useState<string | null>(null);
@@ -88,11 +99,23 @@ function App() {
     const [tocOpen, setTocOpen] = useState(false);
     const [chatOpen, setChatOpen] = useState(true);
     const [docsOpen, setDocsOpen] = useState(false);
+    const [viewMode, setViewMode] = useState<"explorer" | "viewer">("explorer");
     const [currentPage, setCurrentPage] = useState(1);
     const [menuOpen, setMenuOpen] = useState(false);
     const [settingsOpen, setSettingsOpen] = useState(false);
     const [documents, setDocuments] = useState<DocumentInfo[]>([]);
     const [currentDocId, setCurrentDocId] = useState<string | null>(null);
+    const [isEmbedding, setIsEmbedding] = useState(false);
+    const [embeddingProgress, setEmbeddingProgress] = useState(0);
+
+    useEffect(() => {
+        const initHomeDir = async () => {
+            const defaultDir = await window.electronAPI.fs.getDefaultDir();
+            console.log('Starting in directory:', defaultDir);
+            setCurrentPath(defaultDir);
+        };
+        initHomeDir();
+    }, []);
 
     useEffect(() => {
         const initSession = async () => {
@@ -202,6 +225,55 @@ function App() {
             console.error('Error deleting document:', error);
         }
     }, [currentDocId]);
+
+    const handleFileExplorerNavigate = useCallback((path: string) => {
+        setCurrentPath(path);
+    }, []);
+
+    const handleFileClick = useCallback((file: FileEntry) => {
+        if (!file.isDirectory) {
+            setSelectedFile(file);
+            setViewMode("viewer");
+            if (file.name.endsWith('.pdf')) {
+                setIsEmbedding(true);
+                setEmbeddingProgress(10);
+                window.electronAPI.readFile(file.path).then(buffer => {
+                    if (buffer) {
+                        setPdfPath(file.path);
+                        setFileName(file.name);
+                        setPdfData(new Uint8Array(buffer));
+                        setEmbeddingProgress(30);
+                        // Load PDF text for embedding
+                        if (sessionId) {
+                            window.electronAPI.loadPdfText(new Uint8Array(buffer), file.path, sessionId).then((hash) => {
+                                if (hash) {
+                                    setEmbeddingProgress(100);
+                                    setTimeout(() => setIsEmbedding(false), 500);
+                                } else {
+                                    setEmbeddingProgress(100);
+                                    setTimeout(() => setIsEmbedding(false), 500);
+                                }
+                            }).catch(() => {
+                                setEmbeddingProgress(100);
+                                setTimeout(() => setIsEmbedding(false), 500);
+                            });
+                        } else {
+                            setEmbeddingProgress(100);
+                            setTimeout(() => setIsEmbedding(false), 500);
+                        }
+                    } else {
+                        setIsEmbedding(false);
+                    }
+                }).catch(() => {
+                    setIsEmbedding(false);
+                });
+            }
+        }
+    }, [sessionId]);
+
+    const handleCloseFileViewer = useCallback(() => {
+        setSelectedFile(null);
+    }, []);
 
     const handleTextSelect = useCallback((text: string) => {
         setSelectedText(text);
@@ -361,47 +433,132 @@ function App() {
                 </div>
             </header>
             <div className="relative flex h-full bg-primary-950 p-3 gap-3 z-0 min-h-0">
-                {/* TOC Panel */}
-                <div
-                    className={`h-full rounded-2xl overflow-hidden glass-panel shadow-glass transition-all duration-300 ease-in-out  ${tocOpen ? "w-80 opacity-100" : "w-0 opacity-0 p-0"
-                        }`}
-                >
-                    {tocOpen && (
-                        <TOCPanel
-                            pdf={pdf}
-                            onNavigate={handleNavigate}
-                            currentPage={currentPage}
-                        />
-                    )}
-                </div>
 
-                {/* PDF Panel */}
-                <div className="flex-1 h-full rounded-2xl overflow-hidden glass-panel shadow-glass">
-                    <PDFViewer
-                        pdfData={pdfData}
-                        onFileOpen={handleFileOpen}
-                        onFileDrop={handleFileDrop}
-                        onTextSelect={handleTextSelect}
-                        fileName={fileName || undefined}
-                        navigateToPage={currentPage}
-                        onPageChange={handlePageChange}
-                        onPdfLoad={handlePdfLoad}
-                    />
-                </div>
+                {/* Main Content - Explorer or Viewer */}
+                {viewMode === "explorer" ? (
+                    <>
+                        {/* File Explorer - 60% */}
+                        <div className="flex-[3] h-full rounded-2xl overflow-hidden glass-panel shadow-glass">
+                            <FileExplorer
+                                currentPath={currentPath || ""}
+                                onNavigate={handleFileExplorerNavigate}
+                                onFileClick={handleFileClick}
+                            />
+                        </div>
+                        {/* Unified Panel - 40% */}
+                        <div className="flex-[2] h-full rounded-2xl overflow-hidden glass-panel shadow-glass">
+                            <UnifiedPanel
+                                currentPath={currentPath || ""}
+                                onNavigate={handleFileExplorerNavigate}
+                                onFileSelect={(file) => {
+                                    handleFileClick(file);
+                                    setSelectedFile(file);
+                                    setViewMode("viewer");
+                                }}
+                                mode="explorer"
+                                pdfPath={pdfPath}
+                                sessionId={sessionId}
+                                selectedText={selectedText}
+                                onClearSelection={handleClearSelection}
+                            />
+                        </div>
+                    </>
+                ) : (
+                    <>
+                        {/* TOC Panel */}
+                        <div
+                            className={`h-full rounded-2xl overflow-hidden glass-panel shadow-glass transition-all duration-300 ${tocOpen ? "w-72 opacity-100" : "w-0 opacity-0 overflow-hidden"}`}
+                        >
+                            {tocOpen && pdf && (
+                                <TOCPanel pdf={pdf} onNavigate={handleNavigate} currentPage={currentPage} />
+                            )}
+                        </div>
 
-                {/* Chat Panel */}
-                <div
-                    className={`h-full rounded-2xl overflow-hidden glass-panel shadow-glass transition-all duration-300 ease-in-out ${chatOpen ? "w-[600px] opacity-100" : "w-0 opacity-0 p-0"
-                        }`}
-                >
-{chatOpen && (
-                        <ChatPanel
-                            sessionId={sessionId}
-                            selectedText={selectedText}
-                            onClearSelection={handleClearSelection}
-                        />
-                    )}
-                </div>
+                        {/* PDF Viewer */}
+                        <div className="flex-1 h-full rounded-2xl overflow-hidden glass-panel shadow-glass">
+                            <div className="h-full flex flex-col">
+                                {/* Combined Header */}
+                                <div className="p-3 border-b border-white/10">
+                                    <div className="flex items-center justify-between">
+                                        <div className="flex items-center gap-2">
+                                            <button
+                                                onClick={() => {
+                                                    setViewMode("explorer");
+                                                    setSelectedFile(null);
+                                                }}
+                                                className="p-2 rounded-lg hover:bg-white/10 text-purple-300 hover:text-white transition-colors"
+                                            >
+                                                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                                                </svg>
+                                            </button>
+                                            <span className="text-white font-medium">{selectedFile?.name}</span>
+                                        </div>
+                                        <button
+                                            onClick={() => {
+                                                setViewMode("explorer");
+                                                setSelectedFile(null);
+                                            }}
+                                            className="p-2 rounded-lg hover:bg-white/10 text-purple-300 hover:text-white transition-colors"
+                                        >
+                                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                            </svg>
+                                        </button>
+                                    </div>
+                                    {/* Progress Bar */}
+                                    {isEmbedding && (
+                                        <div className="mt-2">
+                                            <div className="flex items-center justify-between text-xs text-purple-300 mb-1">
+                                                <span>Embedding document...</span>
+                                                <span>{embeddingProgress}%</span>
+                                            </div>
+                                            <div className="h-1.5 bg-white/10 rounded-full overflow-hidden">
+                                                <div 
+                                                    className="h-full bg-purple-500 rounded-full transition-all duration-300"
+                                                    style={{ width: `${embeddingProgress}%` }}
+                                                />
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                                <div className="flex-1 overflow-hidden">
+                                    <PDFViewer
+                                        pdfData={pdfData}
+                                        onTextSelect={handleTextSelect}
+                                        fileName={fileName || undefined}
+                                        navigateToPage={currentPage}
+                                        onPageChange={handlePageChange}
+                                        onPdfLoad={handlePdfLoad}
+                                    />
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Unified Panel */}
+                        <div className="w-[500px] h-full rounded-2xl overflow-hidden glass-panel shadow-glass">
+                            <UnifiedPanel
+                                currentPath={currentPath || ""}
+                                onNavigate={handleFileExplorerNavigate}
+                                onFileSelect={(file) => {
+                                    handleFileClick(file);
+                                    setSelectedFile(file);
+                                }}
+                                mode="viewer"
+                                pdfPath={pdfPath}
+                                sessionId={sessionId}
+                                selectedText={selectedText}
+                                onClearSelection={handleClearSelection}
+                                onBack={() => {
+                                    setViewMode("explorer");
+                                    setSelectedFile(null);
+                                }}
+                                isEmbedding={isEmbedding}
+                                embeddingProgress={embeddingProgress}
+                            />
+                        </div>
+                    </>
+                )}
 
                 {/* Documents Panel - Left Side */}
                 <div

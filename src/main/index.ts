@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, dialog } from 'electron'
-import { join } from 'path'
-import { existsSync } from 'fs'
+import { join, dirname } from 'path'
+import { existsSync, readdirSync, statSync } from 'fs'
+import { homedir } from 'os'
 import log from 'electron-log'
 import { db as appDb } from './db'
 import { invokeAgent, processPdfDocument, getEmbeddedDocuments, switchToDocument, getCurrentDocumentId, deleteEmbeddedDocument } from './agent'
@@ -223,6 +224,71 @@ ipcMain.handle('window-maximize', () => {
 
 ipcMain.handle('window-close', () => {
   mainWindow?.close()
+})
+
+// File System Operations
+ipcMain.handle('fs:get-home-dir', () => {
+  const home = homedir()
+  log.info('Home directory:', home)
+  return home
+})
+
+ipcMain.handle('fs:get-default-dir', () => {
+  const home = homedir()
+  const docsPath = join(home, 'Documents')
+  if (existsSync(docsPath)) {
+    log.info('Default directory (Documents):', docsPath)
+    return docsPath
+  }
+  log.info('Default directory (home):', home)
+  return home
+})
+
+ipcMain.handle('fs:read-dir', async (_, dirPath: string) => {
+  try {
+    log.info('fs:read-dir called with path:', dirPath)
+    if (!existsSync(dirPath)) {
+      log.error('Directory does not exist:', dirPath)
+      return null
+    }
+    const entries = readdirSync(dirPath, { withFileTypes: true })
+    const files = entries.map(entry => {
+      const fullPath = join(dirPath, entry.name)
+      const stats = statSync(fullPath)
+      return {
+        name: entry.name,
+        path: fullPath,
+        isDirectory: entry.isDirectory(),
+        size: stats.size,
+        modified: stats.mtime.toISOString()
+      }
+    })
+    // Sort: directories first, then files, both alphabetically
+    files.sort((a, b) => {
+      if (a.isDirectory && !b.isDirectory) return -1
+      if (!a.isDirectory && b.isDirectory) return 1
+      return a.name.localeCompare(b.name)
+    })
+    return files
+  } catch (error) {
+    log.error('Error reading directory:', error)
+    return null
+  }
+})
+
+ipcMain.handle('fs:get-parent-dir', async (_, dirPath: string) => {
+  try {
+    const parent = dirname(dirPath)
+    if (parent === dirPath) return null // Root reached
+    return parent
+  } catch (error) {
+    log.error('Error getting parent directory:', error)
+    return null
+  }
+})
+
+ipcMain.handle('fs:exists', async (_, filePath: string) => {
+  return existsSync(filePath)
 })
 
 app.whenReady().then(async () => {
