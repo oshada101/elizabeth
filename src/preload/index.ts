@@ -51,6 +51,8 @@ const api = {
         ipcRenderer.invoke("add-message", sessionId, role, content),
     clearMessages: (sessionId: number): Promise<void> =>
         ipcRenderer.invoke("clear-messages", sessionId),
+    deleteSession: (sessionId: number): Promise<boolean> =>
+        ipcRenderer.invoke("delete-session", sessionId),
     ask: (message: string, sessionId: number) => ipcRenderer.invoke("ask", message, sessionId),
     onAgentChunk: (callback: (chunk: string) => void) => {
         const handler = (_event: any, chunk: string) => callback(chunk);
@@ -61,6 +63,11 @@ const api = {
         const handler = (_event: any, toolCall: any) => callback(toolCall);
         ipcRenderer.on('agent:tool', handler);
         return () => ipcRenderer.removeListener('agent:tool', handler);
+    },
+    onEmbeddingProgress: (callback: (progress: number) => void) => {
+        const handler = (_event: any, progress: number) => callback(progress);
+        ipcRenderer.on('embedding:progress', handler);
+        return () => ipcRenderer.removeListener('embedding:progress', handler);
     },
     loadPdfText: (pdfData: Uint8Array, filePath: string, sessionId: number): Promise<string | null> =>
         ipcRenderer.invoke("load-pdf-text", pdfData, filePath, sessionId),

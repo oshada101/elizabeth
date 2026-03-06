@@ -144,7 +144,8 @@ async function deleteVectorsForDocument(documentId: string): Promise<void> {
 export async function processPdfDocument(
     pdfData: Uint8Array,
     filePath: string,
-    fileName: string
+    fileName: string,
+    onProgress?: (progress: number) => void
 ): Promise<{ hash: string; isNew: boolean; chunkCount: number }> {
     const hash = hashPdfData(pdfData);
     const existingDoc = getDocumentByHash(hash);
@@ -169,7 +170,7 @@ export async function processPdfDocument(
     const pages = docs.map(doc => doc.pageContent);
 
     // Embed pages
-    const chunkCount = await embedPagesForDocument(pages, hash);
+    const chunkCount = await embedPagesForDocument(pages, hash, onProgress);
 
     // Register in document registry
     registerDocument(hash, filePath, fileName, pdfData.length, chunkCount);
@@ -181,7 +182,7 @@ export async function processPdfDocument(
 /**
  * Embed pages for a specific document
  */
-async function embedPagesForDocument(pages: string[], documentId: string): Promise<number> {
+async function embedPagesForDocument(pages: string[], documentId: string, onProgress?: (progress: number) => void): Promise<number> {
     const BATCH_SIZE = 10;
     let globalChunkIndex = 0;
 
@@ -215,6 +216,11 @@ async function embedPagesForDocument(pages: string[], documentId: string): Promi
         await vectorStore.addDocuments(batch);
         completedChunks += batch.length;
         log.info(`Embedded ${completedChunks}/${allChunks.length} chunks`);
+
+        if (onProgress) {
+            const progressPercentage = Math.round((completedChunks / allChunks.length) * 100);
+            onProgress(progressPercentage);
+        }
     }
 
     log.info(`Finished embedding: ${allChunks.length} total chunks`);
@@ -263,7 +269,7 @@ export async function deleteEmbeddedDocument(hash: string): Promise<boolean> {
 /**
  * Search current document only
  */
-async function searchCurrentDocument(query: string, k: number = 5): Promise<string> {
+async function searchCurrentDocument(query: string, k: number = 15): Promise<string> {
     if (!currentDocumentId) {
         return "No document is currently open.";
     }
@@ -289,7 +295,7 @@ async function searchCurrentDocument(query: string, k: number = 5): Promise<stri
 /**
  * Search all documents
  */
-async function searchAllDocuments(query: string, k: number = 5): Promise<string> {
+async function searchAllDocuments(query: string, k: number = 15): Promise<string> {
     try {
         const results = await vectorStore.similaritySearch(query, k);
 
@@ -312,7 +318,7 @@ async function searchAllDocuments(query: string, k: number = 5): Promise<string>
 // Tool: Search current document
 const searchCurrentDocTool = tool(
     async (input: { query: string }) => {
-        const context = await searchCurrentDocument(input.query, 5);
+        const context = await searchCurrentDocument(input.query, 15);
         return context;
     },
     {
@@ -327,7 +333,7 @@ const searchCurrentDocTool = tool(
 // Tool: Search all documents
 const searchAllDocsTool = tool(
     async (input: { query: string }) => {
-        const context = await searchAllDocuments(input.query, 5);
+        const context = await searchAllDocuments(input.query, 15);
         return context;
     },
     {

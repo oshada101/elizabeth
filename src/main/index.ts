@@ -139,6 +139,19 @@ ipcMain.handle('clear-messages', (_event, sessionId: number) => {
   stmt.run(sessionId)
 })
 
+ipcMain.handle('delete-session', (_event, sessionId: number) => {
+  try {
+    const deleteMessages = appDb.prepare('DELETE FROM messages WHERE session_id = ?')
+    deleteMessages.run(sessionId)
+    const deleteSession = appDb.prepare('DELETE FROM sessions WHERE id = ?')
+    deleteSession.run(sessionId)
+    return true
+  } catch (error) {
+    log.error('Error deleting session:', error)
+    return false
+  }
+})
+
 ipcMain.handle('ask', async (event, message: string, sessionId: number) => {
   const response = await invokeAgent(
     [{ role: 'user', content: message }],
@@ -154,12 +167,14 @@ ipcMain.handle('ask', async (event, message: string, sessionId: number) => {
 });
 
 
-ipcMain.handle('load-pdf-text', async (_, pdfData: Uint8Array, filePath: string, sessionId: number) => {
+ipcMain.handle('load-pdf-text', async (event, pdfData: Uint8Array, filePath: string, sessionId: number) => {
   try {
     log.info("loading pdf")
 
     const fileName = filePath.split(/[\\/]/).pop() || 'document.pdf';
-    const result = await processPdfDocument(pdfData, filePath, fileName);
+    const result = await processPdfDocument(pdfData, filePath, fileName, (progress: number) => {
+      event.sender.send('embedding:progress', progress);
+    });
 
     if (result.isNew) {
       log.info(`Embedded new document: ${result.chunkCount} chunks`);

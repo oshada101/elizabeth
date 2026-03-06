@@ -26,9 +26,11 @@ declare global {
                 content: string,
             ) => Promise<number>;
             clearMessages: (sessionId: number) => Promise<void>;
+            deleteSession: (sessionId: number) => Promise<boolean>;
             ask: (message: string, sessionId: number) => Promise<any>;
             onAgentChunk: (callback: (chunk: string) => void) => () => void;
             onAgentTool: (callback: (toolCall: any) => void) => () => void;
+            onEmbeddingProgress: (callback: (progress: number) => void) => () => void;
             loadPdfText: (pdfData: Uint8Array, filePath: string, sessionId: number) => Promise<string | null>;
             documents: {
                 list: () => Promise<Array<{ id: string, file_name: string, file_path: string, total_chunks: number, last_accessed: string }>>;
@@ -140,6 +142,15 @@ function App() {
         initSession();
     }, []);
 
+    useEffect(() => {
+        // Setup embedding progress listener
+        const removeProgressListener = window.electronAPI.onEmbeddingProgress((progress: number) => {
+            setEmbeddingProgress(Math.min(99, Math.max(0, progress)));
+        });
+
+        return () => removeProgressListener();
+    }, []);
+
     // Load documents list on mount and when pdfData changes
     useEffect(() => {
         const loadDocuments = async () => {
@@ -232,6 +243,37 @@ function App() {
         setCurrentPath(path);
     }, []);
 
+    const handleNewSession = useCallback(async () => {
+        try {
+            const newId = await window.electronAPI.createSession("");
+            if (newId) {
+                setSessionId(newId as number);
+                setSelectedText(null);
+            }
+        } catch (e) {
+            console.error('Failed to create new session', e);
+        }
+    }, []);
+
+    const handleSessionChange = useCallback(async (newSessionId: number) => {
+        setSessionId(newSessionId);
+    }, []);
+
+    const handleDeleteSession = useCallback(async (targetSessionId: number) => {
+        try {
+            await window.electronAPI.deleteSession(targetSessionId);
+            if (sessionId === targetSessionId) {
+                // Create a new session if we deleted the current one
+                const newId = await window.electronAPI.createSession("");
+                if (newId) {
+                    setSessionId(newId as number);
+                }
+            }
+        } catch (e) {
+            console.error('Failed to delete session', e);
+        }
+    }, [sessionId]);
+
     const handleFileClick = useCallback((file: FileEntry) => {
         if (!file.isDirectory) {
             setSelectedFile(file);
@@ -320,10 +362,8 @@ function App() {
                 try {
                     const newId = await window.electronAPI.createSession("");
                     if (newId) {
-                        setSessionId(newId);
+                        setSessionId(newId as number);
                         setSelectedText(null);
-                        // ensure UI loads new (empty) messages
-                        await window.electronAPI.clearMessages(newId);
                     }
                 } catch (e) {
                     console.error('Failed to create new session', e);
@@ -462,6 +502,9 @@ function App() {
                                 sessionId={sessionId}
                                 selectedText={selectedText}
                                 onClearSelection={handleClearSelection}
+                                onNewSession={handleNewSession}
+                                onSessionChange={handleSessionChange}
+                                onDeleteSession={handleDeleteSession}
                             />
                         </div>
                     </>
@@ -551,6 +594,9 @@ function App() {
                                 sessionId={sessionId}
                                 selectedText={selectedText}
                                 onClearSelection={handleClearSelection}
+                                onNewSession={handleNewSession}
+                                onSessionChange={handleSessionChange}
+                                onDeleteSession={handleDeleteSession}
                                 onBack={() => {
                                     setViewMode("explorer");
                                     setSelectedFile(null);
@@ -581,8 +627,8 @@ function App() {
                                         key={doc.id}
                                         onClick={() => handleSwitchDocument(doc.id)}
                                         className={`w-full text-left p-3 rounded-xl transition-all duration-200 ${currentDocId === doc.id
-                                                ? "bg-purple-500/30 border border-purple-500/30"
-                                                : "bg-white/5 hover:bg-white/10 border border-transparent"
+                                            ? "bg-purple-500/30 border border-purple-500/30"
+                                            : "bg-white/5 hover:bg-white/10 border border-transparent"
                                             }`}
                                     >
                                         <div className="flex items-start gap-3">
