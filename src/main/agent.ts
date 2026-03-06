@@ -9,10 +9,10 @@ import { RecursiveCharacterTextSplitter } from "@langchain/textsplitters";
 import { Document } from "@langchain/core/documents";
 import z from "zod";
 import { getDefaultApiKey } from "./keyManager";
-import { 
-    hashPdfData, 
-    getDocumentByHash, 
-    registerDocument, 
+import {
+    hashPdfData,
+    getDocumentByHash,
+    registerDocument,
     touchDocument,
     getAllDocuments,
     deleteDocument
@@ -28,7 +28,7 @@ async function getModel() {
     if (!model || !key) throw new Error('Model or API key is missing');
 
     const isLocal = provider === 'local';
-    
+
     if (isLocal) {
         return new ChatOllama({
             model,
@@ -55,8 +55,8 @@ const vectorDbPath = join(userDataPath, 'vectors.db');
 export { db };
 export const saver = new SqliteSaver(db);
 
-// nomic-embed-text produces 768-dimensional embeddings
-const EMBEDDING_DIM = 768;
+// all-minilm produces 384-dimensional embeddings
+const EMBEDDING_DIM = 384;
 const TABLE_NAME = "pdf_vectors";
 const COLUMN_NAME = "embedding";
 
@@ -75,7 +75,7 @@ async function initVectorStore() {
             ${COLUMN_NAME} F32_BLOB(${EMBEDDING_DIM})
         )
     `);
-    
+
     await libsqlClient.execute(`
         CREATE INDEX IF NOT EXISTS idx_${TABLE_NAME}_${COLUMN_NAME} 
         ON ${TABLE_NAME}(libsql_vector_idx(${COLUMN_NAME}))
@@ -86,8 +86,8 @@ async function initVectorStore() {
 initVectorStore().catch(err => log.error('Failed to init vector store:', err));
 
 const embeddings = new OllamaEmbeddings({
-  model: "nomic-embed-text:latest",
-  baseUrl: "http://localhost:11434",
+    model: "all-minilm:latest",
+    baseUrl: "http://localhost:11434",
 });
 
 // LibSQL vector store - persists to disk, no memory issues
@@ -97,10 +97,10 @@ export const vectorStore = new LibSQLVectorStore(embeddings, {
     column: COLUMN_NAME,
 });
 
-// Built-in text splitter from LangChain
+// Text splitter - sized for all-minilm's 256-token context (~500 chars)
 const textSplitter = new RecursiveCharacterTextSplitter({
-    chunkSize: 2000,
-    chunkOverlap: 200,
+    chunkSize: 500,
+    chunkOverlap: 50,
 });
 
 // Current document tracking
@@ -128,7 +128,7 @@ async function deleteVectorsForDocument(documentId: string): Promise<void> {
             .filter((doc: Document) => doc.metadata.document_id === documentId)
             .map((doc: Document) => doc.metadata.chunk_id as string)
             .filter(Boolean);
-        
+
         if (docsToDelete.length > 0) {
             await vectorStore.delete({ ids: docsToDelete });
             log.info(`Deleted ${docsToDelete.length} vectors for document ${documentId.substring(0, 8)}...`);
@@ -142,13 +142,13 @@ async function deleteVectorsForDocument(documentId: string): Promise<void> {
  * Process and embed PDF with hash-based deduplication
  */
 export async function processPdfDocument(
-    pdfData: Uint8Array, 
-    filePath: string, 
+    pdfData: Uint8Array,
+    filePath: string,
     fileName: string
 ): Promise<{ hash: string; isNew: boolean; chunkCount: number }> {
     const hash = hashPdfData(pdfData);
     const existingDoc = getDocumentByHash(hash);
-    
+
     // Check if document already exists
     if (existingDoc) {
         log.info(`Document already embedded: ${fileName} (${hash.substring(0, 8)}...)`);
@@ -156,10 +156,10 @@ export async function processPdfDocument(
         setCurrentDocumentId(hash);
         return { hash, isNew: false, chunkCount: existingDoc.total_chunks };
     }
-    
+
     // New document - need to embed
     log.info(`Embedding new document: ${fileName} (${hash.substring(0, 8)}...)`);
-    
+
     // Extract text using PDFLoader
     const { PDFLoader } = await import("@langchain/community/document_loaders/fs/pdf");
     const buffer = Buffer.from(pdfData);
@@ -167,14 +167,14 @@ export async function processPdfDocument(
     const loader = new PDFLoader(blob, { parsedItemSeparator: "" });
     const docs = await loader.load();
     const pages = docs.map(doc => doc.pageContent);
-    
+
     // Embed pages
     const chunkCount = await embedPagesForDocument(pages, hash);
-    
+
     // Register in document registry
     registerDocument(hash, filePath, fileName, pdfData.length, chunkCount);
     setCurrentDocumentId(hash);
-    
+
     return { hash, isNew: true, chunkCount };
 }
 
@@ -182,48 +182,43 @@ export async function processPdfDocument(
  * Embed pages for a specific document
  */
 async function embedPagesForDocument(pages: string[], documentId: string): Promise<number> {
-    let totalChunks = 0;
-    let chunkBuffer: Document[] = [];
     const BATCH_SIZE = 10;
     let globalChunkIndex = 0;
-    
+
+    // Step 1: Split all pages into chunks first (CPU-only, fast)
+    const allChunks: Document[] = [];
     for (let pageIndex = 0; pageIndex < pages.length; pageIndex++) {
         const pageText = pages[pageIndex];
         if (!pageText || pageText.trim().length === 0) continue;
-        
+
         const pageChunks = await textSplitter.splitText(pageText);
-        
+
         for (const chunk of pageChunks) {
-            chunkBuffer.push(new Document({
+            allChunks.push(new Document({
                 pageContent: chunk,
-                metadata: { 
+                metadata: {
                     document_id: documentId,
                     page_index: pageIndex,
                     chunk_index: globalChunkIndex,
                 },
             }));
             globalChunkIndex++;
-            
-            if (chunkBuffer.length >= BATCH_SIZE) {
-                await vectorStore.addDocuments(chunkBuffer);
-                totalChunks += chunkBuffer.length;
-                chunkBuffer = [];
-            }
-        }
-        
-        if ((pageIndex + 1) % 100 === 0) {
-            log.info(`Processed ${pageIndex + 1}/${pages.length} pages (${totalChunks} chunks)`);
         }
     }
-    
-    // Final batch
-    if (chunkBuffer.length > 0) {
-        await vectorStore.addDocuments(chunkBuffer);
-        totalChunks += chunkBuffer.length;
+
+    log.info(`Split into ${allChunks.length} chunks, embedding in batches of ${BATCH_SIZE}...`);
+
+    // Step 2: Process sequentially in batches
+    let completedChunks = 0;
+    for (let i = 0; i < allChunks.length; i += BATCH_SIZE) {
+        const batch = allChunks.slice(i, i + BATCH_SIZE);
+        await vectorStore.addDocuments(batch);
+        completedChunks += batch.length;
+        log.info(`Embedded ${completedChunks}/${allChunks.length} chunks`);
     }
-    
-    log.info(`Finished embedding: ${totalChunks} total chunks`);
-    return totalChunks;
+
+    log.info(`Finished embedding: ${allChunks.length} total chunks`);
+    return allChunks.length;
 }
 
 /**
@@ -235,7 +230,7 @@ export function switchToDocument(hash: string): boolean {
         log.error(`Document not found: ${hash}`);
         return false;
     }
-    
+
     touchDocument(hash);
     setCurrentDocumentId(hash);
     return true;
@@ -272,18 +267,18 @@ async function searchCurrentDocument(query: string, k: number = 5): Promise<stri
     if (!currentDocumentId) {
         return "No document is currently open.";
     }
-    
+
     try {
         // Search all then filter by current document
         const results = await vectorStore.similaritySearch(query, k * 3);
-        const filtered = results.filter((doc: Document) => 
+        const filtered = results.filter((doc: Document) =>
             doc.metadata.document_id === currentDocumentId
         ).slice(0, k);
-        
+
         if (filtered.length === 0) {
             return "No relevant content found in the current document.";
         }
-        
+
         return filtered.map(doc => doc.pageContent).join('\n\n');
     } catch (error) {
         log.error('Error searching current document:', error);
@@ -297,14 +292,14 @@ async function searchCurrentDocument(query: string, k: number = 5): Promise<stri
 async function searchAllDocuments(query: string, k: number = 5): Promise<string> {
     try {
         const results = await vectorStore.similaritySearch(query, k);
-        
+
         if (results.length === 0) {
             return "No relevant content found in any document.";
         }
-        
+
         return results.map(doc => {
-            const source = doc.metadata.document_id 
-                ? `[From: ${doc.metadata.document_id.substring(0, 8)}...]\n` 
+            const source = doc.metadata.document_id
+                ? `[From: ${doc.metadata.document_id.substring(0, 8)}...]\n`
                 : '';
             return source + doc.pageContent;
         }).join('\n\n');
@@ -344,9 +339,9 @@ const searchAllDocsTool = tool(
     },
 );
 
-export async function invokeAgent(messages: Array<{role: string; content: string}>, config: {configurable?: {thread_id?: string}}) {
+export async function invokeAgent(messages: Array<{ role: string; content: string }>, config: { configurable?: { thread_id?: string } }, onChunk?: (chunk: string) => void, onToolCall?: (toolCall: any) => void) {
     const model = await getModel();
-    
+
     const agent = createAgent({
         model,
         tools: [searchCurrentDocTool, searchAllDocsTool],
@@ -360,5 +355,52 @@ The search results will include document identifiers when searching all document
         checkpointer: saver,
     });
 
-    return (agent as {invoke: (params: unknown, config: unknown) => Promise<unknown>}).invoke({ messages }, config);
+    if (!onChunk && !onToolCall) {
+        return (agent as { invoke: (params: unknown, config: unknown) => Promise<unknown> }).invoke({ messages }, config);
+    }
+
+    const stream = await (agent as { streamEvents: (params: unknown, config: unknown, options: unknown) => AsyncGenerator<any, void, unknown> }).streamEvents({ messages }, config, { version: "v2" });
+
+    let finalResponse = { messages: [] as any[] };
+
+    for await (const event of stream) {
+        if (event.event === "on_chat_model_stream") {
+            const content = event.data?.chunk?.content;
+            if (content && typeof content === "string") {
+                onChunk?.(content);
+            }
+        } else if (event.event === "on_tool_start") {
+            onToolCall?.({
+                type: "start",
+                name: event.name,
+                input: event.data?.input
+            });
+        } else if (event.event === "on_tool_end") {
+            onToolCall?.({
+                type: "end",
+                name: event.name,
+                output: event.data?.output
+            });
+        } else if (event.event === "on_chain_end") {
+            // Keep track of final message state
+            if (event.data?.output?.messages) {
+                finalResponse.messages = event.data.output.messages;
+            } else if (event.data?.output && Array.isArray(event.data.output) && event.data.output.length > 0 && event.data.output[0].role) {
+                finalResponse.messages = event.data.output;
+            }
+        }
+    }
+
+    if (!finalResponse.messages || finalResponse.messages.length === 0) {
+        try {
+            const state = await (agent as any).getState(config);
+            if (state?.values?.messages) {
+                finalResponse.messages = state.values.messages;
+            }
+        } catch (e) {
+            console.error("Could not get state from checkpointer", e);
+        }
+    }
+
+    return finalResponse;
 }

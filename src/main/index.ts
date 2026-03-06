@@ -139,10 +139,16 @@ ipcMain.handle('clear-messages', (_event, sessionId: number) => {
   stmt.run(sessionId)
 })
 
-ipcMain.handle('ask', async (_, message: string, sessionId: number) => {
+ipcMain.handle('ask', async (event, message: string, sessionId: number) => {
   const response = await invokeAgent(
     [{ role: 'user', content: message }],
-    { configurable: { thread_id: `session_${sessionId}` } }
+    { configurable: { thread_id: `session_${sessionId}` } },
+    (chunk) => {
+      event.sender.send('agent:chunk', chunk);
+    },
+    (toolCall) => {
+      event.sender.send('agent:tool', toolCall);
+    }
   );
   return response;
 });
@@ -151,16 +157,16 @@ ipcMain.handle('ask', async (_, message: string, sessionId: number) => {
 ipcMain.handle('load-pdf-text', async (_, pdfData: Uint8Array, filePath: string, sessionId: number) => {
   try {
     log.info("loading pdf")
-    
+
     const fileName = filePath.split(/[\\/]/).pop() || 'document.pdf';
     const result = await processPdfDocument(pdfData, filePath, fileName);
-    
+
     if (result.isNew) {
       log.info(`Embedded new document: ${result.chunkCount} chunks`);
     } else {
       log.info(`Using existing embedding: ${result.chunkCount} chunks`);
     }
-    
+
     return result.hash;
   } catch (error) {
     log.error('Error processing PDF:', error);

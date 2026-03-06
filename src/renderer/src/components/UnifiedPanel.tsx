@@ -33,6 +33,33 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
     const [input, setInput] = useState("");
     const [loading, setLoading] = useState(false);
 
+    // Streaming state
+    const [streamingContent, setStreamingContent] = useState("");
+    const [activeTool, setActiveTool] = useState<{ name: string, input?: any } | null>(null);
+    const [completedTools, setCompletedTools] = useState<{ name: string, output?: any }[]>([]);
+
+    useEffect(() => {
+        // Setup chunk listener
+        const removeChunkListener = window.electronAPI.onAgentChunk((chunk: string) => {
+            setStreamingContent(prev => prev + chunk);
+        });
+
+        const removeToolListener = window.electronAPI.onAgentTool((toolCall: any) => {
+            if (toolCall.type === 'start') {
+                setActiveTool({ name: toolCall.name, input: toolCall.input });
+                setStreamingContent(""); // Clear text when starting a tool to keep it clean
+            } else if (toolCall.type === 'end') {
+                setCompletedTools(prev => [...prev, { name: toolCall.name, output: toolCall.output }]);
+                setActiveTool(null);
+            }
+        });
+
+        return () => {
+            removeChunkListener();
+            removeToolListener();
+        };
+    }, []);
+
     useEffect(() => {
         if (sessionId) {
             loadMessages();
@@ -65,7 +92,7 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
             mainText = contextMatch[1];
         }
 
-        const match = mainText.match(/^\[\[TEXT:(.+)\]\]\n([\s\S]*)$/);
+        const match = mainText.match(/^\[\[TEXT:([\s\S]+?)\]\]\n([\s\S]*)$/);
         if (match) {
             return { mainText: match[2], attachedText: match[1] };
         }
@@ -91,10 +118,9 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
             window.electronAPI.addMessage(sessionId, "user", fullMessage).then(async () => {
                 const msgCountBefore = await loadMessages();
                 window.electronAPI.ask(fullMessage, sessionId).then(async (response) => {
+                    // Once ask resolves, save final messages to DB
                     if (response && Array.isArray(response.messages) && response.messages.length > 0) {
-                        // Get only new messages (after what we had before)
                         const newMessages = response.messages.slice(msgCountBefore);
-                        console.log(response)
                         for (const msg of newMessages) {
                             const role = msg.type === 'tool' ? 'tool' : 'assistant';
                             let content: string;
@@ -105,14 +131,19 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
                             }
                             await window.electronAPI.addMessage(sessionId, role, content);
                         }
-                        await loadMessages();
                     } else {
                         await window.electronAPI.addMessage(sessionId, 'assistant', 'No response available.');
-                        await loadMessages();
                     }
+                    setStreamingContent("");
+                    setActiveTool(null);
+                    setCompletedTools([]);
+                    await loadMessages();
                     setLoading(false);
                 }).catch(async (err) => {
                     await window.electronAPI.addMessage(sessionId, 'assistant', 'Error: ' + (err?.message || "Unknown error"));
+                    setStreamingContent("");
+                    setActiveTool(null);
+                    setCompletedTools([]);
                     await loadMessages();
                     setLoading(false);
                 });
@@ -239,10 +270,77 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
                         </div>
                     </div>
                 ))}
-                {loading && (
+
+                {/* Streaming view */}
+                {(streamingContent || activeTool || completedTools.length > 0) && (
+                    <div className="flex flex-col gap-3">
+                        {completedTools.map((tool, idx) => (
+                            <div key={`tool-done-${idx}`} className="flex justify-start">
+                                <div className="max-w-[85%] p-3 rounded-xl bg-yellow-500/10 border border-yellow-500/20">
+                                    <div className="flex items-center gap-2">
+                                        <div className="flex items-center gap-1.5 px-2 py-1 bg-yellow-500/15 rounded-lg border border-yellow-500/25">
+                                            <svg className="w-3.5 h-3.5 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                            </svg>
+                                            <span className="text-xs font-medium text-yellow-300">Tool</span>
+                                        </div>
+                                        <span className="text-sm text-yellow-200/90">{tool.name.replace('🔧 Tool: ', '')}</span>
+                                    </div>
+                                </div>
+                            </div>
+                        ))}
+
+                        {(activeTool || streamingContent) && (
+                            <div className="flex justify-start">
+                                <div className="max-w-[85%] p-3 rounded-xl bg-white/5 text-purple-100">
+                                    {activeTool ? (
+                                        <div className="flex items-center gap-2 mb-2">
+                                            <div className="flex items-center gap-1.5 px-2 py-1 bg-yellow-500/15 rounded-lg border border-yellow-500/25">
+                                                <svg className="w-3.5 h-3.5 text-yellow-400 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                                                </svg>
+                                                <span className="text-xs font-medium text-yellow-300">Using {activeTool.name}...</span>
+                                            </div>
+                                        </div>
+                                    ) : null}
+
+                                    {streamingContent && (
+                                        <div className="text-sm prose prose-invert prose-sm max-w-none">
+                                            <ReactMarkdown
+                                                components={{
+                                                    p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
+                                                    ul: ({ children }) => <ul className="list-disc list-inside mb-2 space-y-1">{children}</ul>,
+                                                    ol: ({ children }) => <ol className="list-decimal list-inside mb-2 space-y-1">{children}</ol>,
+                                                    li: ({ children }) => <li className="text-purple-100">{children}</li>,
+                                                    code: ({ children, className }) => {
+                                                        const isInline = !className;
+                                                        return isInline ? (
+                                                            <code className="bg-white/10 px-1.5 py-0.5 rounded text-purple-200 text-xs">{children}</code>
+                                                        ) : (
+                                                            <code className={`${className} block bg-primary-900/50 p-2 rounded-lg my-2 overflow-x-auto text-xs`}>{children}</code>
+                                                        );
+                                                    },
+                                                    pre: ({ children }) => <pre className="bg-primary-900/50 p-3 rounded-lg my-2 overflow-x-auto text-xs">{children}</pre>,
+                                                }}
+                                            >
+                                                {streamingContent}
+                                            </ReactMarkdown>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                )}
+
+                {loading && !streamingContent && !activeTool && (
                     <div className="flex justify-start">
                         <div className="bg-white/5 p-3 rounded-xl">
-                            <div className="animate-pulse text-purple-300 text-sm">Processing...</div>
+                            <div className="animate-pulse flex items-center gap-1">
+                                <span className="w-1.5 h-1.5 bg-purple-400 rounded-full"></span>
+                                <span className="w-1.5 h-1.5 bg-purple-400 rounded-full" style={{ animationDelay: "0.2s" }}></span>
+                                <span className="w-1.5 h-1.5 bg-purple-400 rounded-full" style={{ animationDelay: "0.4s" }}></span>
+                            </div>
                         </div>
                     </div>
                 )}

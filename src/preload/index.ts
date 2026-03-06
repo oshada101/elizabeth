@@ -52,6 +52,16 @@ const api = {
     clearMessages: (sessionId: number): Promise<void> =>
         ipcRenderer.invoke("clear-messages", sessionId),
     ask: (message: string, sessionId: number) => ipcRenderer.invoke("ask", message, sessionId),
+    onAgentChunk: (callback: (chunk: string) => void) => {
+        const handler = (_event: any, chunk: string) => callback(chunk);
+        ipcRenderer.on('agent:chunk', handler);
+        return () => ipcRenderer.removeListener('agent:chunk', handler);
+    },
+    onAgentTool: (callback: (toolCall: any) => void) => {
+        const handler = (_event: any, toolCall: any) => callback(toolCall);
+        ipcRenderer.on('agent:tool', handler);
+        return () => ipcRenderer.removeListener('agent:tool', handler);
+    },
     loadPdfText: (pdfData: Uint8Array, filePath: string, sessionId: number): Promise<string | null> =>
         ipcRenderer.invoke("load-pdf-text", pdfData, filePath, sessionId),
     documents: {

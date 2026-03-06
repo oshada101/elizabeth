@@ -27,9 +27,11 @@ declare global {
             ) => Promise<number>;
             clearMessages: (sessionId: number) => Promise<void>;
             ask: (message: string, sessionId: number) => Promise<any>;
+            onAgentChunk: (callback: (chunk: string) => void) => () => void;
+            onAgentTool: (callback: (toolCall: any) => void) => () => void;
             loadPdfText: (pdfData: Uint8Array, filePath: string, sessionId: number) => Promise<string | null>;
             documents: {
-                list: () => Promise<Array<{id: string, file_name: string, file_path: string, total_chunks: number, last_accessed: string}>>;
+                list: () => Promise<Array<{ id: string, file_name: string, file_path: string, total_chunks: number, last_accessed: string }>>;
                 switch: (hash: string) => Promise<boolean>;
                 current: () => Promise<string | null>;
                 delete: (hash: string) => Promise<boolean>;
@@ -37,7 +39,7 @@ declare global {
             fs: {
                 getHomeDir: () => Promise<string>;
                 getDefaultDir: () => Promise<string>;
-                readDir: (dirPath: string) => Promise<Array<{name: string, path: string, isDirectory: boolean, size: number, modified: string}>>;
+                readDir: (dirPath: string) => Promise<Array<{ name: string, path: string, isDirectory: boolean, size: number, modified: string }>>;
                 getParentDir: (dirPath: string) => Promise<string | null>;
                 exists: (filePath: string) => Promise<boolean>;
             };
@@ -514,7 +516,7 @@ function App() {
                                                 <span>{embeddingProgress}%</span>
                                             </div>
                                             <div className="h-1.5 bg-white/10 rounded-full overflow-hidden">
-                                                <div 
+                                                <div
                                                     className="h-full bg-purple-500 rounded-full transition-all duration-300"
                                                     style={{ width: `${embeddingProgress}%` }}
                                                 />
@@ -578,11 +580,10 @@ function App() {
                                     <button
                                         key={doc.id}
                                         onClick={() => handleSwitchDocument(doc.id)}
-                                        className={`w-full text-left p-3 rounded-xl transition-all duration-200 ${
-                                            currentDocId === doc.id
+                                        className={`w-full text-left p-3 rounded-xl transition-all duration-200 ${currentDocId === doc.id
                                                 ? "bg-purple-500/30 border border-purple-500/30"
                                                 : "bg-white/5 hover:bg-white/10 border border-transparent"
-                                        }`}
+                                            }`}
                                     >
                                         <div className="flex items-start gap-3">
                                             <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-purple-400 mt-0.5 flex-shrink-0" viewBox="0 0 20 20" fill="currentColor">
