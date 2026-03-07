@@ -581,7 +581,7 @@ function App() {
                         </div>
 
                         {/* PDF Viewer */}
-                        <div className="flex-1 h-full rounded-2xl overflow-hidden glass-panel shadow-glass">
+                        <div className="flex-[3] h-full rounded-2xl overflow-hidden glass-panel shadow-glass">
                             <div className="h-full flex flex-col">
                                 {/* Combined Header */}
                                 <div className="p-3 border-b border-white/10">
@@ -642,7 +642,7 @@ function App() {
                         </div>
 
                         {/* Unified Panel */}
-                        <div className="w-[500px] h-full rounded-2xl overflow-hidden glass-panel shadow-glass">
+                        <div className="flex-[2] h-full rounded-2xl overflow-hidden glass-panel shadow-glass">
                             <UnifiedPanel
                                 currentPath={currentPath || ""}
                                 onNavigate={handleFileExplorerNavigate}
