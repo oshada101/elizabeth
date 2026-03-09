@@ -15,6 +15,7 @@ import {
     registerDocument,
     touchDocument,
     getAllDocuments,
+    getDocumentsByPath,
     deleteDocument
 } from "./documentRegistry";
 import { db } from './db';
@@ -401,6 +402,35 @@ const searchAllDocsTool = tool(
     },
 );
 
+// Tool: List embedded files
+const listFilesTool = tool(
+    async (input: { currentPath?: string }) => {
+        const docs = getDocumentsByPath(input.currentPath || "");
+        
+        if (docs.length === 0) {
+            return input.currentPath 
+                ? `No documents embedded in directory: ${input.currentPath}`
+                : "No documents embedded yet.";
+        }
+
+        return docs.map(doc => {
+            const sizeKB = Math.round(doc.file_size / 1024);
+            const sizeStr = sizeKB > 1024 
+                ? `${(sizeKB / 1024).toFixed(1)} MB` 
+                : `${sizeKB} KB`;
+            const date = doc.created_at.split(' ')[0];
+            return `📄 ${doc.file_name} (${sizeStr}, ${doc.total_chunks} chunks, embedded ${date})`;
+        }).join('\n');
+    },
+    {
+        name: "list_directory_files",
+        description: "List all PDF documents embedded in a specific directory and its subdirectories. Use this tool when the user asks to list, show, or get all embedded files in a folder.",
+        schema: z.object({
+            currentPath: z.string().optional().describe("Optional directory path to filter documents"),
+        }),
+    },
+);
+
 export async function invokeAgent(messages: Array<{ role: string; content: string }>, config: { configurable?: { thread_id?: string } }, currentPath?: string, onChunk?: (chunk: string) => void, onToolCall?: (toolCall: any) => void) {
     const model = await getModel();
 
@@ -421,13 +451,14 @@ export async function invokeAgent(messages: Array<{ role: string; content: strin
 
     const agent = createAgent({
         model,
-        tools: [searchCurrentDocTool, searchDirTool, searchAllDocsTool],
+        tools: [searchCurrentDocTool, searchDirTool, searchAllDocsTool, listFilesTool],
         systemPrompt: `You are a helpful AI assistant with access to the user's PDF document library.
 
-You have three retrieval tools, use them according to these STRICT rules:
+You have four retrieval tools, use them according to these STRICT rules:
 1. When the user asks about "this document" or "the current document", use the 'search_current' tool to search only the currently open PDF.
-2. By DEFAULT, for ANY general question about their files, use the 'search_directory' tool. This restricts your search to the user's active folder context.
-3. If you cannot find what you're looking for, or if the user explicitly asks to search "all my files" or " everywhere", you MUST ASK FOR PERMISSION FIRST before using the 'search_all' tool. Once they say "yes" or give explicit consent, use 'search_all' with request_permission: true.
+2. Use the 'list_directory_files' tool whenever you need to know what files are embedded in a directory (e.g., to check if a file exists, to get file metadata, or to reference file names).
+3. By DEFAULT, for ANY general question about their files, use the 'search_directory' tool. This restricts your search to the user's active folder context.
+4. If you cannot find what you're looking for, or if the user explicitly asks to search "all my files" or " everywhere", you MUST ASK FOR PERMISSION FIRST before using the 'search_all' tool. Once they say "yes" or give explicit consent, use 'search_all' with request_permission: true.
 
 The search results will include document identifiers. Use these to reference which file information came from.`,
         checkpointer: saver,

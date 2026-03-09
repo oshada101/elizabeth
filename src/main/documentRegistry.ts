@@ -112,6 +112,27 @@ export function deleteDocument(hash: string): void {
 }
 
 /**
+ * Get documents filtered by directory path
+ */
+export function getDocumentsByPath(currentPath: string): DocumentMetadata[] {
+    try {
+        if (!currentPath) {
+            return getAllDocuments();
+        }
+        const stmt = appDb.prepare(`
+            SELECT * FROM documents 
+            WHERE file_path LIKE ? 
+            ORDER BY last_accessed DESC
+        `);
+        const docs = stmt.all(`${currentPath}%`) as DocumentMetadata[];
+        return docs;
+    } catch (error) {
+        log.error('Error in getDocumentsByPath:', error);
+        return [];
+    }
+}
+
+/**
  * Get document count
  */
 export function getDocumentCount(): number {
