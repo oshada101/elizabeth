@@ -402,35 +402,6 @@ const searchAllDocsTool = tool(
     },
 );
 
-// Tool: List embedded files
-const listFilesTool = tool(
-    async (input: { currentPath?: string }) => {
-        const docs = getDocumentsByPath(input.currentPath || "");
-        
-        if (docs.length === 0) {
-            return input.currentPath 
-                ? `No documents embedded in directory: ${input.currentPath}`
-                : "No documents embedded yet.";
-        }
-
-        return docs.map(doc => {
-            const sizeKB = Math.round(doc.file_size / 1024);
-            const sizeStr = sizeKB > 1024 
-                ? `${(sizeKB / 1024).toFixed(1)} MB` 
-                : `${sizeKB} KB`;
-            const date = doc.created_at.split(' ')[0];
-            return `📄 ${doc.file_name} (${sizeStr}, ${doc.total_chunks} chunks, embedded ${date})`;
-        }).join('\n');
-    },
-    {
-        name: "list_directory_files",
-        description: "List all PDF documents embedded in a specific directory and its subdirectories. Use this tool when the user asks to list, show, or get all embedded files in a folder.",
-        schema: z.object({
-            currentPath: z.string().optional().describe("Optional directory path to filter documents"),
-        }),
-    },
-);
-
 export async function invokeAgent(messages: Array<{ role: string; content: string }>, config: { configurable?: { thread_id?: string } }, currentPath?: string, onChunk?: (chunk: string) => void, onToolCall?: (toolCall: any) => void) {
     const model = await getModel();
 
@@ -445,6 +416,36 @@ export async function invokeAgent(messages: Array<{ role: string; content: strin
             description: "Search ONLY the documents in the user's current folder and its subfolders. Use this as your default and primary search mechanism for any general questions unless otherwise specified.",
             schema: z.object({
                 query: z.string().describe("The search query"),
+            }),
+        },
+    );
+
+    // Tool: List embedded files (instantiated here so it can capture currentPath)
+    const listFilesTool = tool(
+        async (input: { currentPath?: string }) => {
+            const searchPath = input.currentPath || currentPath || "";
+            const docs = getDocumentsByPath(searchPath);
+            
+            if (docs.length === 0) {
+                return searchPath 
+                    ? `No documents embedded in directory: ${searchPath}`
+                    : "No documents embedded yet.";
+            }
+
+            return docs.map(doc => {
+                const sizeKB = Math.round(doc.file_size / 1024);
+                const sizeStr = sizeKB > 1024 
+                    ? `${(sizeKB / 1024).toFixed(1)} MB` 
+                    : `${sizeKB} KB`;
+                const date = doc.created_at.split(' ')[0];
+                return `📄 ${doc.file_name} (${sizeStr}, ${doc.total_chunks} chunks, embedded ${date})`;
+            }).join('\n');
+        },
+        {
+            name: "list_directory_files",
+            description: "List all PDF documents embedded in a specific directory and its subdirectories.",
+            schema: z.object({
+                currentPath: z.string().optional().describe("Optional directory path to filter documents"),
             }),
         },
     );

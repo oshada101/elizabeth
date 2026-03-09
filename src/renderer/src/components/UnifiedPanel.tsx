@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo, memo } from "react";
 import ReactMarkdown from "react-markdown";
+import ChatInput from "./ChatInput";
 
 interface FileEntry {
     name: string;
@@ -40,7 +41,6 @@ interface Session {
 
 export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mode, sessionId, onBack, selectedText, onClearSelection, isEmbedding, embeddingProgress, onNewSession, onSessionChange, onDeleteSession }: UnifiedPanelProps) {
     const [messages, setMessages] = useState<Message[]>([]);
-    const [input, setInput] = useState("");
     const [loading, setLoading] = useState(false);
 
     // Streaming state
@@ -140,11 +140,9 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
         return { mainText, attachedText: null };
     };
 
-    const handleSubmit = useCallback((e: React.FormEvent) => {
-        e.preventDefault();
-        if (!input.trim() || loading) return;
+    const handleSubmit = useCallback((userInput: string) => {
+        if (!userInput.trim() || loading) return;
 
-        const userInput = input;
         const contextStr = mode === "explorer" ? "file explorer" : "document viewer";
         const prefix = `[System Context: User is currently in ${contextStr} mode]\n`;
 
@@ -197,9 +195,7 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
             setMessages(prev => [...prev, { role: "assistant", content: "No active session." }]);
             setLoading(false);
         }
-
-        setInput("");
-    }, [input, loading, mode, sessionId, selectedText, onClearSelection]);
+    }, [loading, mode, sessionId, selectedText, onClearSelection, currentPath]);
 
     const formatSessionDate = (dateStr: string) => {
         const date = new Date(dateStr);
@@ -553,26 +549,11 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
             )}
 
             {/* Input */}
-            <form onSubmit={handleSubmit} className="p-4 border-t border-white/10">
-                <div className="flex gap-2">
-                    <input
-                        type="text"
-                        value={input}
-                        onChange={(e) => setInput(e.target.value)}
-                        placeholder={mode === "explorer" ? "Ask to navigate or find files..." : "Ask about the document..."}
-                        className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-2 text-sm text-white placeholder-purple-300/50 focus:outline-none focus:border-purple-500/50"
-                    />
-                    <button
-                        type="submit"
-                        disabled={!input.trim() || loading}
-                        className="px-4 py-2 bg-purple-500/30 hover:bg-purple-500/50 text-purple-200 rounded-xl transition-colors disabled:opacity-50"
-                    >
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-                        </svg>
-                    </button>
-                </div>
-            </form>
+            <ChatInput
+                onSubmit={handleSubmit}
+                placeholder={mode === "explorer" ? "Ask to navigate or find files..." : "Ask about the document..."}
+                disabled={loading}
+            />
         </div>
     );
 }
