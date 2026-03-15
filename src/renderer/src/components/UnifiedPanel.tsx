@@ -48,6 +48,16 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
     const [activeTool, setActiveTool] = useState<{ name: string, input?: any } | null>(null);
     const [completedTools, setCompletedTools] = useState<{ name: string, output?: any }[]>([]);
 
+    // Organize confirmation state
+    const [organizePlan, setOrganizePlan] = useState<{
+        targetPath: string;
+        strategy: string;
+        flatten: boolean;
+        groups: { folder: string; files: string[] }[];
+        subfoldersScanned?: string[];
+        totalFiles?: number;
+    } | null>(null);
+
     // Session management state
     const [sessions, setSessions] = useState<Session[]>([]);
     const [sessionsOpen, setSessionsOpen] = useState(false);
@@ -86,12 +96,44 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
         });
 
         const removeToolListener = window.electronAPI.onAgentTool((toolCall: any) => {
+            console.log('Tool call:', JSON.stringify(toolCall, null, 2));
             if (toolCall.type === 'start') {
                 setActiveTool({ name: toolCall.name, input: toolCall.input });
                 setStreamingContent(""); // Clear text when starting a tool to keep it clean
             } else if (toolCall.type === 'end') {
                 setCompletedTools(prev => [...prev, { name: toolCall.name, output: toolCall.output }]);
                 setActiveTool(null);
+                
+                // Check if this is an organize_plan response
+                if (toolCall.name === 'organize_folder' && toolCall.output) {
+                    try {
+                        // Handle LangChain message format
+                        let outputContent: string;
+                        if (typeof toolCall.output === 'string') {
+                            outputContent = toolCall.output;
+                        } else if (toolCall.output.lc_kwargs?.content) {
+                            outputContent = toolCall.output.lc_kwargs.content;
+                        } else if (toolCall.output.content) {
+                            outputContent = toolCall.output.content;
+                        } else {
+                            outputContent = JSON.stringify(toolCall.output);
+                        }
+                        
+                        const output = JSON.parse(outputContent);
+                        if (output.type === 'organize_plan') {
+                            setOrganizePlan({
+                                targetPath: output.targetPath,
+                                strategy: output.strategy || 'type',
+                                flatten: output.flatten || false,
+                                groups: output.groups,
+                                subfoldersScanned: output.subfoldersScanned,
+                                totalFiles: output.totalFiles
+                            });
+                        }
+                    } catch (e) {
+                        // Not JSON, ignore
+                    }
+                }
             }
         });
 
@@ -196,6 +238,45 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
             setLoading(false);
         }
     }, [loading, mode, sessionId, selectedText, onClearSelection, currentPath]);
+
+    const handleOrganizeConfirm = useCallback(async () => {
+        if (!organizePlan || !sessionId) return;
+        
+        const { targetPath, strategy, flatten } = organizePlan;
+        setOrganizePlan(null);
+        setLoading(true);
+        
+        // Directly call the IPC handler to organize
+        try {
+            const result = await window.electronAPI.fs.organizeFolder({
+                action: "organize",
+                targetPath,
+                strategy: strategy || 'type',
+                flatten: flatten || false
+            });
+            
+            let responseMsg = "";
+            if (result.cancelled) {
+                responseMsg = "Operation was cancelled.";
+            } else if (result.success) {
+                responseMsg = `Successfully organized ${result.moved} files using ${result.strategy || (flatten ? 'flatten' : 'type')} strategy.`;
+            } else {
+                responseMsg = `Error organizing folder: ${result.error}`;
+            }
+            
+            await window.electronAPI.addMessage(sessionId, "assistant", responseMsg);
+            await loadMessages();
+        } catch (e) {
+            await window.electronAPI.addMessage(sessionId, "assistant", "Error: Failed to organize folder");
+            await loadMessages();
+        }
+        
+        setLoading(false);
+    }, [organizePlan, sessionId, loadMessages]);
+
+    const handleOrganizeCancel = useCallback(() => {
+        setOrganizePlan(null);
+    }, []);
 
     const formatSessionDate = (dateStr: string) => {
         const date = new Date(dateStr);
@@ -524,6 +605,70 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
                     </div>
                 )}
             </div>
+
+            {/* Organize Confirmation Modal */}
+            {organizePlan && (
+                <div className="p-4 border-t border-white/10 bg-purple-500/10">
+                    <div className="bg-white/5 rounded-xl p-4 border border-purple-500/30">
+                        <div className="flex items-center gap-2 mb-3">
+                            <svg className="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                            </svg>
+                            <span className="font-medium text-purple-100">Confirm Folder Organization</span>
+                        </div>
+                        
+                        <div className="text-sm text-purple-300 mb-3">
+                            <p className="mb-2">Organize <span className="text-purple-200">{organizePlan.targetPath}</span></p>
+                            <p className="text-purple-400/70">
+                                {organizePlan.flatten 
+                                    ? "Flatten: Move all files to root, remove subfolders" 
+                                    : `Strategy: ${organizePlan.strategy} (include subfolders)`
+                                }
+                            </p>
+                            {organizePlan.totalFiles && (
+                                <p className="text-purple-400/70 text-xs mt-1">{organizePlan.totalFiles} files to process</p>
+                            )}
+                        </div>
+
+                        <div className="space-y-2 mb-4 max-h-40 overflow-y-auto">
+                            {organizePlan.groups.map((group, idx) => (
+                                <div key={idx} className="bg-white/5 rounded-lg p-2">
+                                    <div className="flex items-center gap-2 text-purple-200 text-sm font-medium mb-1">
+                                        <svg className="w-4 h-4 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                                        </svg>
+                                        {group.folder}/ ({group.files.length} files)
+                                    </div>
+                                    <div className="pl-6 space-y-0.5">
+                                        {group.files.slice(0, 3).map((file, fIdx) => (
+                                            <div key={fIdx} className="text-xs text-purple-300/70 truncate">{file}</div>
+                                        ))}
+                                        {group.files.length > 3 && (
+                                            <div className="text-xs text-purple-400/50">+{group.files.length - 3} more</div>
+                                        )}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+
+                        <div className="flex gap-2">
+                            <button
+                                onClick={handleOrganizeCancel}
+                                className="flex-1 px-4 py-2 rounded-lg bg-white/10 hover:bg-white/20 text-purple-200 text-sm font-medium transition-colors"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={handleOrganizeConfirm}
+                                disabled={loading}
+                                className="flex-1 px-4 py-2 rounded-lg bg-purple-500 hover:bg-purple-600 text-white text-sm font-medium transition-colors disabled:opacity-50"
+                            >
+                                {loading ? "Organizing..." : "Confirm & Organize"}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
 
             {/* Selected Text Section - positioned above input */}

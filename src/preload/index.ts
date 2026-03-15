@@ -118,7 +118,7 @@ const api = {
         moveFile: (oldPath: string, newPath: string): Promise<{ success: boolean; error?: string }> => ipcRenderer.invoke("fs:move-file", oldPath, newPath),
         createDirectory: (dirPath: string): Promise<{ success: boolean; error?: string }> => ipcRenderer.invoke("fs:create-directory", dirPath),
         delete: (targetPath: string): Promise<{ success: boolean; error?: string }> => ipcRenderer.invoke("fs:delete", targetPath),
-        organizeFolder: (options: { targetPath: string; action: string; strategy?: string }): Promise<{ cancelled?: boolean; success?: boolean; moved?: number; strategy?: string; error?: string }> => ipcRenderer.invoke("fs:organize-folder", options),
+        organizeFolder: (options: { targetPath: string; action: string; strategy?: string; flatten?: boolean }): Promise<{ cancelled?: boolean; success?: boolean; moved?: number; strategy?: string; error?: string }> => ipcRenderer.invoke("fs:organize-folder", options),
     },
     windowMinimize: () => ipcRenderer.invoke("window-minimize"),
     windowMaximize: () => ipcRenderer.invoke("window-maximize"),
