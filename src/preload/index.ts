@@ -31,6 +31,15 @@ export interface FileEntry {
     modified: string;
 }
 
+export interface TreeEntry {
+    name: string;
+    path: string;
+    isDirectory: boolean;
+    children?: TreeEntry[];
+    size?: number;
+    modified?: string;
+}
+
 const api = {
     openFileDialog: (): Promise<string | null> =>
         ipcRenderer.invoke("open-file-dialog"),
@@ -105,6 +114,11 @@ const api = {
         readDir: (dirPath: string): Promise<FileEntry[] | null> => ipcRenderer.invoke("fs:read-dir", dirPath),
         getParentDir: (dirPath: string): Promise<string | null> => ipcRenderer.invoke("fs:get-parent-dir", dirPath),
         exists: (filePath: string): Promise<boolean> => ipcRenderer.invoke("fs:exists", filePath),
+        listTree: (dirPath: string): Promise<TreeEntry[]> => ipcRenderer.invoke("fs:list-tree", dirPath),
+        moveFile: (oldPath: string, newPath: string): Promise<{ success: boolean; error?: string }> => ipcRenderer.invoke("fs:move-file", oldPath, newPath),
+        createDirectory: (dirPath: string): Promise<{ success: boolean; error?: string }> => ipcRenderer.invoke("fs:create-directory", dirPath),
+        delete: (targetPath: string): Promise<{ success: boolean; error?: string }> => ipcRenderer.invoke("fs:delete", targetPath),
+        organizeFolder: (options: { targetPath: string; action: string; strategy?: string }): Promise<{ cancelled?: boolean; success?: boolean; moved?: number; strategy?: string; error?: string }> => ipcRenderer.invoke("fs:organize-folder", options),
     },
     windowMinimize: () => ipcRenderer.invoke("window-minimize"),
     windowMaximize: () => ipcRenderer.invoke("window-maximize"),

@@ -141,5 +141,22 @@ export function getDocumentCount(): number {
     return result.count;
 }
 
+/**
+ * Update file path when a document is moved
+ */
+export function updateDocumentPath(oldPath: string, newPath: string): void {
+    try {
+        const stmt = appDb.prepare(`
+            UPDATE documents SET file_path = ?, last_accessed = CURRENT_TIMESTAMP WHERE file_path = ?
+        `);
+        const result = stmt.run(newPath, oldPath);
+        if (result.changes > 0) {
+            log.info(`Updated document path from ${oldPath} to ${newPath}`);
+        }
+    } catch (error) {
+        log.error('Error updating document path:', error);
+    }
+}
+
 // Initialize on module load
 initDocumentRegistry();

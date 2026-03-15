@@ -1,10 +1,11 @@
 import { app, BrowserWindow, ipcMain, dialog } from 'electron'
 import { join, dirname } from 'path'
-import { existsSync, readdirSync, statSync, readFileSync } from 'fs'
+import { existsSync, readdirSync, statSync, readFileSync, mkdirSync, renameSync, rmSync } from 'fs'
 import { homedir } from 'os'
 import log from 'electron-log'
 import { db as appDb } from './db'
 import { invokeAgent, processPdfDocument, getEmbeddedDocuments, switchToDocument, getCurrentDocumentId, deleteEmbeddedDocument } from './agent'
+import { updateDocumentPath } from './documentRegistry'
 import * as keyManager from './keyManager'
 
 log.initialize()
@@ -400,6 +401,150 @@ ipcMain.handle('fs:get-parent-dir', async (_, dirPath: string) => {
 
 ipcMain.handle('fs:exists', async (_, filePath: string) => {
   return existsSync(filePath)
+})
+
+ipcMain.handle('fs:list-tree', async (_, dirPath: string) => {
+  try {
+    interface TreeEntry {
+      name: string;
+      path: string;
+      isDirectory: boolean;
+      children?: TreeEntry[];
+    }
+    function scanDir(path: string): TreeEntry[] {
+      const entries = readdirSync(path, { withFileTypes: true });
+      return entries.map(entry => {
+        const fullPath = join(path, entry.name);
+        const stats = statSync(fullPath);
+        if (entry.isDirectory()) {
+          return {
+            name: entry.name,
+            path: fullPath,
+            isDirectory: true,
+            children: scanDir(fullPath)
+          };
+        }
+        return {
+          name: entry.name,
+          path: fullPath,
+          isDirectory: false,
+          size: stats.size,
+          modified: stats.mtime.toISOString()
+        };
+      });
+    }
+    return scanDir(dirPath);
+  } catch (error) {
+    log.error('Error listing tree:', error);
+    return [];
+  }
+})
+
+ipcMain.handle('fs:move-file', async (_, oldPath: string, newPath: string) => {
+  try {
+    const stats = statSync(oldPath);
+    renameSync(oldPath, newPath);
+    if (oldPath.toLowerCase().endsWith('.pdf')) {
+      updateDocumentPath(oldPath, newPath);
+    }
+    log.info(`Moved ${oldPath} to ${newPath}`);
+    return { success: true };
+  } catch (error) {
+    log.error('Error moving file:', error);
+    return { success: false, error: String(error) };
+  }
+})
+
+ipcMain.handle('fs:create-directory', async (_, dirPath: string) => {
+  try {
+    mkdirSync(dirPath, { recursive: true });
+    log.info(`Created directory: ${dirPath}`);
+    return { success: true };
+  } catch (error) {
+    log.error('Error creating directory:', error);
+    return { success: false, error: String(error) };
+  }
+})
+
+ipcMain.handle('fs:delete', async (_, targetPath: string) => {
+  try {
+    const stats = statSync(targetPath);
+    if (stats.isDirectory()) {
+      rmSync(targetPath, { recursive: true });
+    } else {
+      rmSync(targetPath);
+    }
+    log.info(`Deleted: ${targetPath}`);
+    return { success: true };
+  } catch (error) {
+    log.error('Error deleting:', error);
+    return { success: false, error: String(error) };
+  }
+})
+
+ipcMain.handle('fs:organize-folder', async (event, options: { targetPath: string, action: string, strategy?: string }) => {
+  const { response } = await dialog.showMessageBox({
+    type: 'question',
+    buttons: ['Cancel', 'Organize'],
+    defaultId: 0,
+    title: 'Confirm Folder Reorganization',
+    message: `Organize files in "${options.targetPath}"?`,
+    detail: 'This will move files to new locations.'
+  });
+
+  if (response === 0) return { cancelled: true };
+
+  try {
+    const { targetPath, strategy = 'type' } = options;
+    const entries = readdirSync(targetPath, { withFileTypes: true });
+    const files = entries.filter(e => !e.isDirectory());
+    const groups: Record<string, string[]> = {};
+
+    for (const file of files) {
+      const filePath = join(targetPath, file.name);
+      let groupKey: string;
+
+      if (strategy === 'type') {
+        const ext = file.name.split('.').pop()?.toLowerCase() || 'unknown';
+        groupKey = ext === 'pdf' ? 'PDFs' : ext.toUpperCase() + 's';
+      } else if (strategy === 'date') {
+        const stats = statSync(filePath);
+        const date = stats.mtime;
+        groupKey = date.getFullYear().toString();
+      } else {
+        const nameParts = file.name.split(/[\s_-]/);
+        groupKey = nameParts[0] || 'Other';
+      }
+
+      if (!groups[groupKey]) groups[groupKey] = [];
+      groups[groupKey].push(filePath);
+    }
+
+    const results: { oldPath: string; newPath: string }[] = [];
+
+    for (const [group, paths] of Object.entries(groups)) {
+      const groupDir = join(targetPath, group);
+      if (!existsSync(groupDir)) {
+        mkdirSync(groupDir, { recursive: true });
+      }
+
+      for (const oldPath of paths) {
+        const fileName = oldPath.split(/[\\/]/).pop() || '';
+        const newPath = join(groupDir, fileName);
+        renameSync(oldPath, newPath);
+        if (oldPath.toLowerCase().endsWith('.pdf')) {
+          updateDocumentPath(oldPath, newPath);
+        }
+        results.push({ oldPath, newPath });
+      }
+    }
+
+    log.info(`Organized ${results.length} files with strategy: ${strategy}`);
+    return { success: true, moved: results.length, strategy };
+  } catch (error) {
+    log.error('Error organizing folder:', error);
+    return { success: false, error: String(error) };
+  }
 })
 
 app.whenReady().then(async () => {
