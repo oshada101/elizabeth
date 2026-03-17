@@ -17,7 +17,7 @@ interface FsApi {
     moveFile: (oldPath: string, newPath: string) => Promise<{ success: boolean; error?: string }>;
     createDirectory: (dirPath: string) => Promise<{ success: boolean; error?: string }>;
     delete: (targetPath: string) => Promise<{ success: boolean; error?: string }>;
-    organizeFolder: (options: { targetPath: string; action: string; strategy?: string }) => Promise<{ cancelled?: boolean; success?: boolean; moved?: number; strategy?: string; error?: string }>;
+    organizeFolder: (options: { targetPath: string; action: string; strategy?: string; flatten?: boolean }) => Promise<{ cancelled?: boolean; success?: boolean; moved?: number; strategy?: string; error?: string }>;
 }
 
 interface DocumentsApi {

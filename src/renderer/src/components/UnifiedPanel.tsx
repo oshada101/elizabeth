@@ -96,7 +96,6 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
         });
 
         const removeToolListener = window.electronAPI.onAgentTool((toolCall: any) => {
-            console.log('Tool call:', JSON.stringify(toolCall, null, 2));
             if (toolCall.type === 'start') {
                 setActiveTool({ name: toolCall.name, input: toolCall.input });
                 setStreamingContent(""); // Clear text when starting a tool to keep it clean
@@ -143,14 +142,9 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
         };
     }, []);
 
-    useEffect(() => {
-        if (sessionId) {
-            loadMessages();
-        }
-    }, [sessionId]);
-
     const loadMessages = async () => {
         if (!sessionId) return 0;
+        setMessages([]);
         const msgs = await window.electronAPI.getMessages(sessionId);
         if (msgs.length === 0) {
             setMessages([
@@ -166,6 +160,12 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
         }
         return msgs.length;
     };
+
+    useEffect(() => {
+        if (sessionId) {
+            loadMessages();
+        }
+    }, [sessionId]);
 
 
     const parseMessage = (content: string): { mainText: string; attachedText: string | null } => {
@@ -637,15 +637,12 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
                                         <svg className="w-4 h-4 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
                                         </svg>
-                                        {group.folder}/ ({group.files.length} files)
+                                        {group.folder === "Root" ? "All files to root" : group.folder}/ ({group.files.length} files)
                                     </div>
                                     <div className="pl-6 space-y-0.5">
-                                        {group.files.slice(0, 3).map((file, fIdx) => (
+                                        {group.files.map((file, fIdx) => (
                                             <div key={fIdx} className="text-xs text-purple-300/70 truncate">{file}</div>
                                         ))}
-                                        {group.files.length > 3 && (
-                                            <div className="text-xs text-purple-400/50">+{group.files.length - 3} more</div>
-                                        )}
                                     </div>
                                 </div>
                             ))}

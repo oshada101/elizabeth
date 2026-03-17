@@ -697,12 +697,12 @@ You have six tools, use them according to these STRICT rules:
 3. Use 'list_all_files' to see ALL files (including non-PDFs) in a directory, or to explore folder structure.
 4. By DEFAULT, for ANY general question about their files, use the 'search_directory' tool. This restricts your search to the user's active folder context.
 5. If you cannot find what you're looking for, or if the user explicitly asks to search "all my files" or " everywhere", you MUST ASK FOR PERMISSION FIRST before using the 'search_all' tool. Once they say "yes" or give explicit consent, use 'search_all' with request_permission: true.
-6. If the user asks to "organize" or "reorganize" a folder:
-   - First use 'organize_folder' with action "analyze" to see the proposed structure
-   - Show the user the organization plan (which folders will be created and what files go where)
-   - The UI will show a confirmation dialog. When they click "Confirm", a special message "CONFIRM_ORGANIZE: path with strategy" will be sent.
-   - When you receive "CONFIRM_ORGANIZE: {path} with {strategy}", call organize_folder with action "organize", targetPath: {path}, and strategy: {strategy}
-   - Available strategies: 'type' (by file extension), 'date' (by year), or 'name' (by first word)
+6. FOLDER ORGANIZATION - Only use when user EXPLICITLY asks to "organize" or "reorganize":
+   - The user must say "organize" or "reorganize" (not just ask about files or ask what tools are available)
+   - When they explicitly ask, use 'organize_folder' with action "analyze" to see the proposed structure
+   - The UI will show a confirmation dialog with the plan. When they click "Confirm", the organization will happen automatically.
+   - DO NOT suggest organization or use this tool unless the user explicitly asks for it.
+   - Available strategies: 'type' (by file extension), 'date' (by year), 'name' (by first word), or 'flatten' (move all to root)
 
 The search results will include document identifiers. Use these to reference which file information came from.`,
         checkpointer: saver,

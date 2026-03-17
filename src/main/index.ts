@@ -482,65 +482,115 @@ ipcMain.handle('fs:delete', async (_, targetPath: string) => {
   }
 })
 
-ipcMain.handle('fs:organize-folder', async (event, options: { targetPath: string, action: string, strategy?: string }) => {
-  const { response } = await dialog.showMessageBox({
-    type: 'question',
-    buttons: ['Cancel', 'Organize'],
-    defaultId: 0,
-    title: 'Confirm Folder Reorganization',
-    message: `Organize files in "${options.targetPath}"?`,
-    detail: 'This will move files to new locations.'
-  });
-
-  if (response === 0) return { cancelled: true };
-
+ipcMain.handle('fs:organize-folder', async (event, options: { targetPath: string, action: string, strategy?: string, flatten?: boolean }) => {
   try {
-    const { targetPath, strategy = 'type' } = options;
-    const entries = readdirSync(targetPath, { withFileTypes: true });
-    const files = entries.filter(e => !e.isDirectory());
+    const { targetPath, strategy = 'type', flatten = false } = options;
+    
+    function getAllFiles(dirPath: string): string[] {
+      const allFiles: string[] = [];
+      try {
+        const entries = readdirSync(dirPath, { withFileTypes: true });
+        for (const entry of entries) {
+          const fullPath = join(dirPath, entry.name);
+          if (entry.isDirectory()) {
+            allFiles.push(...getAllFiles(fullPath));
+          } else {
+            allFiles.push(fullPath);
+          }
+        }
+      } catch (e) {
+        log.error('Error scanning directory:', e);
+      }
+      return allFiles;
+    }
+    
+    const allFiles = getAllFiles(targetPath);
     const groups: Record<string, string[]> = {};
-
-    for (const file of files) {
-      const filePath = join(targetPath, file.name);
+    
+    for (const filePath of allFiles) {
+      const fileName = filePath.split(/[\\/]/).pop() || '';
       let groupKey: string;
-
-      if (strategy === 'type') {
-        const ext = file.name.split('.').pop()?.toLowerCase() || 'unknown';
+      
+      if (flatten) {
+        groupKey = "Root";
+      } else if (strategy === 'type') {
+        const ext = fileName.split('.').pop()?.toLowerCase() || 'unknown';
         groupKey = ext === 'pdf' ? 'PDFs' : ext.toUpperCase() + 's';
       } else if (strategy === 'date') {
         const stats = statSync(filePath);
-        const date = stats.mtime;
-        groupKey = date.getFullYear().toString();
+        groupKey = stats.mtime.getFullYear().toString();
       } else {
-        const nameParts = file.name.split(/[\s_-]/);
+        const nameParts = fileName.split(/[\s_-]/);
         groupKey = nameParts[0] || 'Other';
       }
-
+      
       if (!groups[groupKey]) groups[groupKey] = [];
       groups[groupKey].push(filePath);
     }
-
+    
     const results: { oldPath: string; newPath: string }[] = [];
-
-    for (const [group, paths] of Object.entries(groups)) {
-      const groupDir = join(targetPath, group);
-      if (!existsSync(groupDir)) {
-        mkdirSync(groupDir, { recursive: true });
-      }
-
-      for (const oldPath of paths) {
-        const fileName = oldPath.split(/[\\/]/).pop() || '';
-        const newPath = join(groupDir, fileName);
-        renameSync(oldPath, newPath);
-        if (oldPath.toLowerCase().endsWith('.pdf')) {
-          updateDocumentPath(oldPath, newPath);
+    
+    if (flatten) {
+      const usedNames = new Set<string>();
+      for (const oldPath of allFiles) {
+        let fileName = oldPath.split(/[\\/]/).pop() || '';
+        const baseName = fileName.replace(/\.[^.]+$/, '');
+        const ext = fileName.includes('.') ? '.' + fileName.split('.').pop() : '';
+        
+        let newName = fileName;
+        let counter = 1;
+        while (usedNames.has(newName)) {
+          newName = `${baseName}_${counter}${ext}`;
+          counter++;
         }
-        results.push({ oldPath, newPath });
+        usedNames.add(newName);
+        
+        const newPath = join(targetPath, newName);
+        if (oldPath !== newPath) {
+          renameSync(oldPath, newPath);
+          if (oldPath.toLowerCase().endsWith('.pdf')) {
+            updateDocumentPath(oldPath, newPath);
+          }
+          results.push({ oldPath, newPath });
+        }
+      }
+      
+      // Clean up empty subfolders
+      try {
+        const entries = readdirSync(targetPath, { withFileTypes: true });
+        for (const entry of entries) {
+          if (entry.isDirectory()) {
+            const subPath = join(targetPath, entry.name);
+            const subFiles = readdirSync(subPath);
+            if (subFiles.length === 0) {
+              rmSync(subPath, { recursive: true });
+            }
+          }
+        }
+      } catch (e) {}
+    } else {
+      for (const [group, paths] of Object.entries(groups)) {
+        const groupDir = join(targetPath, group);
+        if (!existsSync(groupDir)) {
+          mkdirSync(groupDir, { recursive: true });
+        }
+        
+        for (const oldPath of paths) {
+          const fileName = oldPath.split(/[\\/]/).pop() || '';
+          const newPath = join(groupDir, fileName);
+          if (oldPath !== newPath) {
+            renameSync(oldPath, newPath);
+            if (oldPath.toLowerCase().endsWith('.pdf')) {
+              updateDocumentPath(oldPath, newPath);
+            }
+            results.push({ oldPath, newPath });
+          }
+        }
       }
     }
-
-    log.info(`Organized ${results.length} files with strategy: ${strategy}`);
-    return { success: true, moved: results.length, strategy };
+    
+    log.info(`Organized ${results.length} files with strategy: ${flatten ? 'flatten' : strategy}`);
+    return { success: true, moved: results.length, strategy: flatten ? 'flatten' : strategy };
   } catch (error) {
     log.error('Error organizing folder:', error);
     return { success: false, error: String(error) };
