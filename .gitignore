@@ -34,5 +34,4 @@ logs/
 *.sqlite
 setup.sh
 
-AGENTS.md
-DOCUMENTATION.md
+*.md
