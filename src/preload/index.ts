@@ -120,6 +120,12 @@ const api = {
         delete: (targetPath: string): Promise<{ success: boolean; error?: string }> => ipcRenderer.invoke("fs:delete", targetPath),
         organizeFolder: (options: { targetPath: string; action: string; strategy?: string; flatten?: boolean }): Promise<{ cancelled?: boolean; success?: boolean; moved?: number; strategy?: string; error?: string }> => ipcRenderer.invoke("fs:organize-folder", options),
     },
+    convertDocument: {
+        analyze: (filePath: string): Promise<{ type: string; fileName?: string; outputPath?: string; fileSize?: number; error?: string }> => 
+            ipcRenderer.invoke("convert-document:analyze", filePath),
+        execute: (filePath: string, outputPath: string): Promise<{ success: boolean; pdfPath?: string; error?: string }> => 
+            ipcRenderer.invoke("convert-document:execute", filePath, outputPath),
+    },
     windowMinimize: () => ipcRenderer.invoke("window-minimize"),
     windowMaximize: () => ipcRenderer.invoke("window-maximize"),
     windowClose: () => ipcRenderer.invoke("window-close"),

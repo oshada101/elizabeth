@@ -58,6 +58,13 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
         totalFiles?: number;
     } | null>(null);
 
+    // Convert confirmation state
+    const [convertPlan, setConvertPlan] = useState<{
+        fileName: string;
+        outputPath: string;
+        fileSize: number;
+    } | null>(null);
+
     // Session management state
     const [sessions, setSessions] = useState<Session[]>([]);
     const [sessionsOpen, setSessionsOpen] = useState(false);
@@ -127,6 +134,33 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
                                 groups: output.groups,
                                 subfoldersScanned: output.subfoldersScanned,
                                 totalFiles: output.totalFiles
+                            });
+                        }
+                    } catch (e) {
+                        // Not JSON, ignore
+                    }
+                }
+
+                // Check if this is a convert_plan response
+                if (toolCall.name === 'convert_document' && toolCall.output) {
+                    try {
+                        let outputContent: string;
+                        if (typeof toolCall.output === 'string') {
+                            outputContent = toolCall.output;
+                        } else if (toolCall.output.lc_kwargs?.content) {
+                            outputContent = toolCall.output.lc_kwargs.content;
+                        } else if (toolCall.output.content) {
+                            outputContent = toolCall.output.content;
+                        } else {
+                            outputContent = JSON.stringify(toolCall.output);
+                        }
+                        
+                        const output = JSON.parse(outputContent);
+                        if (output.type === 'convert_plan' && output.fileName) {
+                            setConvertPlan({
+                                fileName: output.fileName,
+                                outputPath: output.outputPath,
+                                fileSize: output.fileSize
                             });
                         }
                     } catch (e) {
@@ -276,6 +310,38 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
 
     const handleOrganizeCancel = useCallback(() => {
         setOrganizePlan(null);
+    }, []);
+
+    const handleConvertConfirm = useCallback(async () => {
+        if (!convertPlan || !sessionId) return;
+        
+        const { fileName, outputPath } = convertPlan;
+        const inputPath = outputPath.replace(/\.pdf$/, '.pptx');
+        setConvertPlan(null);
+        setLoading(true);
+        
+        try {
+            const result = await window.electronAPI.convertDocument.execute(inputPath, outputPath);
+            
+            let responseMsg = "";
+            if (result.success) {
+                responseMsg = `Successfully converted "${fileName}" to PDF: ${result.pdfPath}`;
+            } else {
+                responseMsg = `Error converting document: ${result.error}`;
+            }
+            
+            await window.electronAPI.addMessage(sessionId, "assistant", responseMsg);
+            await loadMessages();
+        } catch (e) {
+            await window.electronAPI.addMessage(sessionId, "assistant", "Error: Failed to convert document");
+            await loadMessages();
+        }
+        
+        setLoading(false);
+    }, [convertPlan, sessionId, loadMessages]);
+
+    const handleConvertCancel = useCallback(() => {
+        setConvertPlan(null);
     }, []);
 
     const formatSessionDate = (dateStr: string) => {
@@ -661,6 +727,46 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
                                 className="flex-1 px-4 py-2 rounded-lg bg-purple-500 hover:bg-purple-600 text-white text-sm font-medium transition-colors disabled:opacity-50"
                             >
                                 {loading ? "Organizing..." : "Confirm & Organize"}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Convert Confirmation Modal */}
+            {convertPlan && (
+                <div className="p-4 border-t border-white/10 bg-emerald-500/10">
+                    <div className="bg-white/5 rounded-xl p-4 border border-emerald-500/30">
+                        <div className="flex items-center gap-2 mb-3">
+                            <svg className="w-5 h-5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                            </svg>
+                            <span className="font-medium text-emerald-100">Confirm PowerPoint to PDF Conversion</span>
+                        </div>
+                        
+                        <div className="text-sm text-emerald-300 mb-3">
+                            <p className="mb-2">Convert <span className="text-emerald-200">{convertPlan.fileName}</span></p>
+                            <p className="text-emerald-400/70">Output: {convertPlan.outputPath}</p>
+                            {convertPlan.fileSize && (
+                                <p className="text-emerald-400/70 text-xs mt-1">
+                                    Size: {Math.round(convertPlan.fileSize / 1024)} KB
+                                </p>
+                            )}
+                        </div>
+
+                        <div className="flex gap-2">
+                            <button
+                                onClick={handleConvertCancel}
+                                className="flex-1 px-4 py-2 rounded-lg bg-white/10 hover:bg-white/20 text-emerald-200 text-sm font-medium transition-colors"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={handleConvertConfirm}
+                                disabled={loading}
+                                className="flex-1 px-4 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-medium transition-colors disabled:opacity-50"
+                            >
+                                {loading ? "Converting..." : "Convert to PDF"}
                             </button>
                         </div>
                     </div>

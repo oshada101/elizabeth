@@ -28,6 +28,11 @@ interface ApiKeysApi {
     update: (id: string, data: any) => Promise<any>;
 }
 
+interface ConvertDocumentApi {
+    analyze: (filePath: string) => Promise<{ type: string; fileName?: string; outputPath?: string; fileSize?: number; error?: string }>;
+    execute: (filePath: string, outputPath: string) => Promise<{ success: boolean; pdfPath?: string; error?: string }>;
+}
+
 interface ElectronAPI {
     openFileDialog: () => Promise<string | null>;
     readFile: (filePath: string) => Promise<Buffer | null>;
@@ -50,6 +55,7 @@ interface ElectronAPI {
     loadPdfText: (pdfData: Uint8Array, filePath: string, sessionId: number) => Promise<string | null>;
     documents: DocumentsApi;
     fs: FsApi;
+    convertDocument: ConvertDocumentApi;
     windowMinimize: () => void;
     windowMaximize: () => void;
     windowClose: () => void;

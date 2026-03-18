@@ -679,19 +679,66 @@ export async function invokeAgent(messages: Array<{ role: string; content: strin
             schema: z.object({
                 action: z.enum(["analyze", "organize"]).describe("The action to perform: 'analyze' to scan and show suggestions, 'organize' to move files to organized folders"),
                 targetPath: z.string().describe("The folder path to organize"),
-                strategy: z.enum(["type", "date", "name"]).optional().describe("How to group files: 'type' (by extension), 'date' (by year), 'name' (by first word)"),
+                strategy: z.enum(["type", "date", "name"]).optional().describe("How to group files: 'type' (by file extension), 'date' (by year), 'name' (by first word)"),
                 includeSubfolders: z.boolean().optional().describe("Include files from subfolders (default: true)"),
                 flatten: z.boolean().optional().describe("Flatten: move all files to root directory, removing subfolders (default: false)")
             }),
         },
     );
 
+    const convertDocumentTool = tool(
+        async (input: { action: string; filePath: string; outputPath?: string }) => {
+            const { action, filePath, outputPath } = input;
+            const { existsSync, statSync, readFileSync, writeFileSync } = await import('fs');
+            
+            if (action === "analyze") {
+                const ext = filePath.toLowerCase().split('.').pop();
+                if (ext !== 'pptx' && ext !== 'ppt') {
+                    return JSON.stringify({ type: "convert_plan", error: 'Not a PowerPoint file' });
+                }
+                if (!existsSync(filePath)) {
+                    return JSON.stringify({ type: "convert_plan", error: 'File not found' });
+                }
+                const stats = statSync(filePath);
+                const fileName = filePath.split(/[\\/]/).pop() || 'unknown.pptx';
+                const targetPath = outputPath || filePath.replace(/\.[^.]+$/, '.pdf');
+                return JSON.stringify({
+                    type: "convert_plan",
+                    fileName,
+                    outputPath: targetPath,
+                    fileSize: stats.size
+                });
+            } else if (action === "convert") {
+                const targetPath = outputPath || filePath.replace(/\.[^.]+$/, '.pdf');
+                try {
+                    const { convert } = await import('pptx-to-pdf');
+                    const pptxBuffer = readFileSync(filePath);
+                    const pdfBuffer = await convert(pptxBuffer);
+                    writeFileSync(targetPath, pdfBuffer);
+                    return `Successfully converted to PDF: ${targetPath}`;
+                } catch (error) {
+                    return `Error converting document: ${String(error)}`;
+                }
+            }
+            return "Invalid action. Use 'analyze' or 'convert'.";
+        },
+        {
+            name: "convert_document",
+            description: "Convert PowerPoint (PPTX) files to PDF format. Use 'analyze' to preview the conversion, 'convert' to execute after user confirms.",
+            schema: z.object({
+                action: z.enum(["analyze", "convert"]).describe("Action: 'analyze' to preview conversion, 'convert' to execute (only after user confirms)"),
+                filePath: z.string().describe("Path to the PowerPoint file (.pptx or .ppt)"),
+                outputPath: z.string().optional().describe("Output PDF path (default: same directory with .pdf extension)")
+            }),
+        },
+    );
+
     const agent = createAgent({
         model,
-        tools: [searchCurrentDocTool, searchDirTool, searchAllDocsTool, listFilesTool, listAllFilesTool, organizeFolderTool],
+        tools: [searchCurrentDocTool, searchDirTool, searchAllDocsTool, listFilesTool, listAllFilesTool, organizeFolderTool, convertDocumentTool],
         systemPrompt: `You are a helpful AI assistant with access to the user's PDF document library.
 
-You have six tools, use them according to these STRICT rules:
+You have seven tools, use them according to these STRICT rules:
 1. When the user asks about "this document" or "the current document", use the 'search_current' tool to search only the currently open PDF.
 2. Use the 'list_directory_files' tool to list only embedded PDFs in a directory.
 3. Use 'list_all_files' to see ALL files (including non-PDFs) in a directory, or to explore folder structure.
@@ -703,6 +750,11 @@ You have six tools, use them according to these STRICT rules:
    - The UI will show a confirmation dialog with the plan. When they click "Confirm", the organization will happen automatically.
    - DO NOT suggest organization or use this tool unless the user explicitly asks for it.
    - Available strategies: 'type' (by file extension), 'date' (by year), 'name' (by first word), or 'flatten' (move all to root)
+7. DOCUMENT CONVERSION - Only use when user EXPLICITLY asks to "convert" or "export" a PowerPoint to PDF:
+   - The user must say "convert" or "export" (not just ask about files)
+   - When they explicitly ask, use 'convert_document' with action "analyze" to preview the conversion
+   - The UI will show a confirmation dialog with file details. When they click "Convert", the conversion will happen automatically.
+   - DO NOT suggest conversion or use this tool unless the user explicitly asks for it.
 
 The search results will include document identifiers. Use these to reference which file information came from.`,
         checkpointer: saver,

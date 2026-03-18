@@ -1,6 +1,6 @@
 import { app, BrowserWindow, ipcMain, dialog } from 'electron'
 import { join, dirname } from 'path'
-import { existsSync, readdirSync, statSync, readFileSync, mkdirSync, renameSync, rmSync } from 'fs'
+import { existsSync, readdirSync, statSync, readFileSync, writeFileSync, mkdirSync, renameSync, rmSync } from 'fs'
 import { homedir } from 'os'
 import log from 'electron-log'
 import { db as appDb } from './db'
@@ -593,6 +593,50 @@ ipcMain.handle('fs:organize-folder', async (event, options: { targetPath: string
     return { success: true, moved: results.length, strategy: flatten ? 'flatten' : strategy };
   } catch (error) {
     log.error('Error organizing folder:', error);
+    return { success: false, error: String(error) };
+  }
+})
+
+ipcMain.handle('convert-document:analyze', async (_, filePath: string) => {
+  try {
+    const ext = filePath.toLowerCase().split('.').pop();
+    if (ext !== 'pptx' && ext !== 'ppt') {
+      return { type: 'convert_plan', error: 'Not a PowerPoint file', fileName: '', outputPath: '' };
+    }
+
+    if (!existsSync(filePath)) {
+      return { type: 'convert_plan', error: 'File not found', fileName: '', outputPath: '' };
+    }
+
+    const stats = statSync(filePath);
+    const fileName = filePath.split(/[\\/]/).pop() || 'unknown.pptx';
+    const baseName = fileName.replace(/\.[^.]+$/, '');
+    const outputPath = filePath.replace(/\.[^.]+$/, '.pdf');
+
+    return {
+      type: 'convert_plan',
+      fileName,
+      outputPath,
+      fileSize: stats.size
+    };
+  } catch (error) {
+    log.error('Error analyzing document for conversion:', error);
+    return { type: 'convert_plan', error: String(error), fileName: '', outputPath: '' };
+  }
+})
+
+ipcMain.handle('convert-document:execute', async (_, filePath: string, outputPath: string) => {
+  try {
+    const { convert } = await import('pptx-to-pdf');
+    const pptxBuffer = readFileSync(filePath);
+    const pdfBuffer = await convert(pptxBuffer);
+    
+    writeFileSync(outputPath, pdfBuffer);
+    log.info(`Converted ${filePath} to ${outputPath}`);
+    
+    return { success: true, pdfPath: outputPath };
+  } catch (error) {
+    log.error('Error converting document:', error);
     return { success: false, error: String(error) };
   }
 })
