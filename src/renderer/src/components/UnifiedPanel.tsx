@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo, memo } from "react";
+import React, { useState, useEffect, useCallback, useMemo, memo, useRef } from "react";
 import ReactMarkdown from "react-markdown";
 import ChatInput from "./ChatInput";
 
@@ -48,6 +48,13 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
     const [streamingContent, setStreamingContent] = useState("");
     const [activeTool, setActiveTool] = useState<{ name: string, input?: any } | null>(null);
     const [completedTools, setCompletedTools] = useState<{ name: string, output?: any }[]>([]);
+
+    // Auto-scroll ref
+    const messagesEndRef = useRef<HTMLDivElement>(null);
+
+    const scrollToBottom = useCallback(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }, []);
 
     // Organize confirmation state
     const [organizePlan, setOrganizePlan] = useState<{
@@ -177,30 +184,49 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
         };
     }, []);
 
-    const loadMessages = async () => {
+
+    const loadMessages = useCallback(async (append: boolean = false) => {
         if (!sessionId) return 0;
-        setMessages([]);
         const msgs = await window.electronAPI.getMessages(sessionId);
-        if (msgs.length === 0) {
+        
+        if (msgs.length === 0 && !append) {
             setMessages([
                 { role: "assistant", content: "Hi! I'm your AI assistant. I can help you navigate files or answer questions about your documents. Ask me anything!" }
             ]);
-        } else {
+        } else if (msgs.length > 0) {
             const sanitizedMsgs = msgs.map((msg: any) => ({
                 ...msg,
                 role: msg.role as 'user' | 'assistant' | 'tool',
                 content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)
             }));
-            setMessages(sanitizedMsgs);
+            if (append) {
+                setMessages(prev => {
+                    const existingIds = new Set(prev.map(m => (m as any).id));
+                    const newMsgs = sanitizedMsgs.filter((m: any) => !existingIds.has(m.id));
+                    if (newMsgs.length > 0) {
+                        return [...prev, ...newMsgs];
+                    }
+                    return prev;
+                });
+            } else {
+                setMessages(sanitizedMsgs);
+            }
         }
         return msgs.length;
-    };
+    }, [sessionId]);
 
     useEffect(() => {
         if (sessionId) {
             loadMessages();
         }
-    }, [sessionId]);
+    }, [sessionId, loadMessages]);
+
+    // Auto-scroll effect - runs after every render
+    useEffect(() => {
+        requestAnimationFrame(() => {
+            scrollToBottom();
+        });
+    }, [messages.length, streamingContent, loading, scrollToBottom]);
 
 
     const parseMessage = (content: string): { mainText: string; attachedText: string | null } => {
@@ -231,12 +257,16 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
         setLoading(true);
 
         if (sessionId) {
+            // Optimistically add user message to UI
+            setMessages(prev => [...prev, { role: "user", content: fullMessage }]);
+            
             window.electronAPI.addMessage(sessionId, "user", fullMessage).then(async () => {
-                const msgCountBefore = await loadMessages();
+                const msgCountBefore = messages.length;
                 window.electronAPI.ask(fullMessage, sessionId, currentPath).then(async (response) => {
-                    // Once ask resolves, save final messages to DB
+                    // Once ask resolves, save final messages to DB and append to UI
                     if (response && Array.isArray(response.messages) && response.messages.length > 0) {
                         const newMessages = response.messages.slice(msgCountBefore);
+                        const assistantMessages: Message[] = [];
                         for (const msg of newMessages) {
                             const role = msg.type === 'tool' ? 'tool' : 'assistant';
                             let content: string;
@@ -246,33 +276,39 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
                                 content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
                             }
                             await window.electronAPI.addMessage(sessionId, role, content);
+                            assistantMessages.push({ role, content });
                         }
+                        // Append assistant messages to UI
+                        setMessages(prev => [...prev, ...assistantMessages]);
                     } else {
-                        await window.electronAPI.addMessage(sessionId, 'assistant', 'No response available.');
+                        const errorMsg = 'No response available.';
+                        await window.electronAPI.addMessage(sessionId, 'assistant', errorMsg);
+                        setMessages(prev => [...prev, { role: "assistant", content: errorMsg }]);
                     }
                     setStreamingContent("");
                     setActiveTool(null);
                     setCompletedTools([]);
-                    await loadMessages();
                     setLoading(false);
                 }).catch(async (err) => {
-                    await window.electronAPI.addMessage(sessionId, 'assistant', 'Error: ' + (err?.message || "Unknown error"));
+                    const errorMsg = 'Error: ' + (err?.message || "Unknown error");
+                    await window.electronAPI.addMessage(sessionId, 'assistant', errorMsg);
+                    setMessages(prev => [...prev, { role: "assistant", content: errorMsg }]);
                     setStreamingContent("");
                     setActiveTool(null);
                     setCompletedTools([]);
-                    await loadMessages();
                     setLoading(false);
                 });
             }).catch(async (err) => {
-                await window.electronAPI.addMessage(sessionId, 'assistant', 'Error: ' + (err?.message || "Failed to send message"));
-                await loadMessages();
+                const errorMsg = 'Error: ' + (err?.message || "Failed to send message");
+                await window.electronAPI.addMessage(sessionId, 'assistant', errorMsg);
+                setMessages(prev => [...prev, { role: "assistant", content: errorMsg }]);
                 setLoading(false);
             });
         } else {
             setMessages(prev => [...prev, { role: "assistant", content: "No active session." }]);
             setLoading(false);
         }
-    }, [loading, mode, sessionId, selectedText, onClearSelection, currentPath]);
+    }, [loading, mode, sessionId, selectedText, onClearSelection, currentPath, messages.length]);
 
     const handleOrganizeConfirm = useCallback(async () => {
         if (!organizePlan || !sessionId) return;
@@ -304,10 +340,11 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
             }
             
             await window.electronAPI.addMessage(sessionId, "assistant", responseMsg);
-            await loadMessages();
+            setMessages(prev => [...prev, { role: "assistant", content: responseMsg }]);
         } catch (e) {
-            await window.electronAPI.addMessage(sessionId, "assistant", "Error: Failed to organize folder");
-            await loadMessages();
+            const errorMsg = "Error: Failed to organize folder";
+            await window.electronAPI.addMessage(sessionId, "assistant", errorMsg);
+            setMessages(prev => [...prev, { role: "assistant", content: errorMsg }]);
         }
         
         setLoading(false);
@@ -349,10 +386,11 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
             }
             
             await window.electronAPI.addMessage(sessionId, "assistant", responseMsg);
-            await loadMessages();
+            setMessages(prev => [...prev, { role: "assistant", content: responseMsg }]);
         } catch (e) {
-            await window.electronAPI.addMessage(sessionId, "assistant", "Error: Failed to convert documents");
-            await loadMessages();
+            const errorMsg = "Error: Failed to convert documents";
+            await window.electronAPI.addMessage(sessionId, "assistant", errorMsg);
+            setMessages(prev => [...prev, { role: "assistant", content: errorMsg }]);
         }
         
         setLoading(false);
@@ -688,6 +726,9 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
                         </div>
                     </div>
                 )}
+
+                {/* Scroll anchor */}
+                <div ref={messagesEndRef} />
             </div>
 
             {/* Organize Confirmation Modal */}
