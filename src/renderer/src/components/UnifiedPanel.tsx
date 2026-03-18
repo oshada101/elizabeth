@@ -25,6 +25,7 @@ interface UnifiedPanelProps {
     onNewSession?: () => void;
     onSessionChange?: (sessionId: number) => void;
     onDeleteSession?: (sessionId: number) => void;
+    onRefreshFolder?: () => void;
 }
 
 interface Message {
@@ -39,7 +40,7 @@ interface Session {
     updated_at: string;
 }
 
-export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mode, sessionId, onBack, selectedText, onClearSelection, isEmbedding, embeddingProgress, onNewSession, onSessionChange, onDeleteSession }: UnifiedPanelProps) {
+export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mode, sessionId, onBack, selectedText, onClearSelection, isEmbedding, embeddingProgress, onNewSession, onSessionChange, onDeleteSession, onRefreshFolder }: UnifiedPanelProps) {
     const [messages, setMessages] = useState<Message[]>([]);
     const [loading, setLoading] = useState(false);
 
@@ -294,6 +295,10 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
                 responseMsg = "Operation was cancelled.";
             } else if (result.success) {
                 responseMsg = `Successfully organized ${result.moved} files using ${result.strategy || (flatten ? 'flatten' : 'type')} strategy.`;
+                // Refresh folder if the organized folder is the same as or under current folder
+                if (onRefreshFolder && (targetPath === currentPath || currentPath.startsWith(targetPath))) {
+                    onRefreshFolder();
+                }
             } else {
                 responseMsg = `Error organizing folder: ${result.error}`;
             }
@@ -306,7 +311,7 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
         }
         
         setLoading(false);
-    }, [organizePlan, sessionId, loadMessages]);
+    }, [organizePlan, sessionId, loadMessages, currentPath, onRefreshFolder]);
 
     const handleOrganizeCancel = useCallback(() => {
         setOrganizePlan(null);
@@ -329,6 +334,16 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
             let responseMsg = "";
             if (result.success) {
                 responseMsg = `Successfully converted ${result.successCount}/${result.totalFiles} files. Failed: ${result.failedCount}`;
+                // Refresh folder if any output file is in current folder or subfolder
+                if (onRefreshFolder) {
+                    const isInCurrentFolder = files.some(f => {
+                        const outputDir = f.outputPath.substring(0, Math.max(f.outputPath.lastIndexOf('/'), f.outputPath.lastIndexOf('\\')));
+                        return outputDir === currentPath || outputDir.startsWith(currentPath + '/') || outputDir.startsWith(currentPath + '\\');
+                    });
+                    if (isInCurrentFolder) {
+                        onRefreshFolder();
+                    }
+                }
             } else {
                 responseMsg = `Error converting documents`;
             }
@@ -341,7 +356,7 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
         }
         
         setLoading(false);
-    }, [convertPlan, sessionId, loadMessages]);
+    }, [convertPlan, sessionId, loadMessages, currentPath, onRefreshFolder]);
 
     const handleConvertCancel = useCallback(() => {
         setConvertPlan(null);

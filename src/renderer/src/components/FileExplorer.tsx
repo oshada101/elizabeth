@@ -20,9 +20,10 @@ interface FileExplorerProps {
         totalFiles: number;
         fileProgress: number;
     } | null;
+    refreshKey?: number;
 }
 
-export default function FileExplorer({ onFileClick, onNavigate, currentPath, onEmbedAll, batchEmbedding, batchProgress }: FileExplorerProps) {
+export default function FileExplorer({ onFileClick, onNavigate, currentPath, onEmbedAll, batchEmbedding, batchProgress, refreshKey }: FileExplorerProps) {
     const [files, setFiles] = useState<FileEntry[]>([]);
     const [loading, setLoading] = useState(true);
     const [viewMode, setViewMode] = useState<"list" | "grid">("list");
@@ -47,7 +48,7 @@ export default function FileExplorer({ onFileClick, onNavigate, currentPath, onE
             }
         };
         loadDirectory();
-    }, [currentPath]);
+    }, [currentPath, refreshKey]);
 
     useEffect(() => {
         if (currentPath) {

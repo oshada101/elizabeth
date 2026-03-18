@@ -97,6 +97,7 @@ interface FileEntry {
 
 function App() {
     const [currentPath, setCurrentPath] = useState<string | null>(null);
+    const [folderRefreshKey, setFolderRefreshKey] = useState(0);
     const [selectedFile, setSelectedFile] = useState<FileEntry | null>(null);
     const [pdfPath, setPdfPath] = useState<string | null>(null);
     const [pdfData, setPdfData] = useState<Uint8Array | null>(null);
@@ -546,6 +547,7 @@ function App() {
                                 onEmbedAll={handleEmbedAll}
                                 batchEmbedding={batchEmbedding}
                                 batchProgress={batchProgress}
+                                refreshKey={folderRefreshKey}
                             />
                         </div>
                         {/* Unified Panel - 40% */}
@@ -566,6 +568,7 @@ function App() {
                                 onNewSession={handleNewSession}
                                 onSessionChange={handleSessionChange}
                                 onDeleteSession={handleDeleteSession}
+                                onRefreshFolder={() => setFolderRefreshKey(k => k + 1)}
                             />
                         </div>
                     </>
