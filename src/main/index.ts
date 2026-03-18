@@ -597,48 +597,86 @@ ipcMain.handle('fs:organize-folder', async (event, options: { targetPath: string
   }
 })
 
-ipcMain.handle('convert-document:analyze', async (_, filePath: string) => {
+ipcMain.handle('convert-document:analyze', async (_, files: { filePath: string; outputPath?: string }[]) => {
   try {
-    const ext = filePath.toLowerCase().split('.').pop();
-    if (ext !== 'pptx' && ext !== 'ppt') {
-      return { type: 'convert_plan', error: 'Not a PowerPoint file', fileName: '', outputPath: '' };
+    const validFiles: { filePath: string; outputPath: string; fileName: string; fileSize: number }[] = [];
+    const errors: string[] = [];
+    
+    for (const f of files) {
+      const filePath = f.filePath;
+      const ext = filePath.toLowerCase().split('.').pop();
+      
+      if (ext !== 'pptx' && ext !== 'ppt') {
+        errors.push(`${filePath}: Not a PowerPoint file`);
+        continue;
+      }
+      
+      if (!existsSync(filePath)) {
+        errors.push(`${filePath}: File not found`);
+        continue;
+      }
+      
+      const stats = statSync(filePath);
+      const fileName = filePath.split(/[\\/]/).pop() || 'unknown.pptx';
+      const outputPath = f.outputPath || filePath.replace(/\.[^.]+$/, '.pdf');
+      
+      validFiles.push({
+        filePath,
+        outputPath,
+        fileName,
+        fileSize: stats.size
+      });
     }
-
-    if (!existsSync(filePath)) {
-      return { type: 'convert_plan', error: 'File not found', fileName: '', outputPath: '' };
-    }
-
-    const stats = statSync(filePath);
-    const fileName = filePath.split(/[\\/]/).pop() || 'unknown.pptx';
-    const baseName = fileName.replace(/\.[^.]+$/, '');
-    const outputPath = filePath.replace(/\.[^.]+$/, '.pdf');
-
+    
+    const totalSize = validFiles.reduce((sum, f) => sum + f.fileSize, 0);
+    
     return {
       type: 'convert_plan',
-      fileName,
-      outputPath,
-      fileSize: stats.size
+      files: validFiles,
+      totalFiles: validFiles.length,
+      totalSize,
+      errors: errors.length > 0 ? errors : undefined
     };
   } catch (error) {
-    log.error('Error analyzing document for conversion:', error);
-    return { type: 'convert_plan', error: String(error), fileName: '', outputPath: '' };
+    log.error('Error analyzing documents for conversion:', error);
+    return { type: 'convert_plan', error: String(error), files: [], totalFiles: 0 };
   }
 })
 
-ipcMain.handle('convert-document:execute', async (_, filePath: string, outputPath: string) => {
-  try {
-    const { convert } = await import('pptx-to-pdf');
-    const pptxBuffer = readFileSync(filePath);
-    const pdfBuffer = await convert(pptxBuffer);
+ipcMain.handle('convert-document:execute', async (_, files: { inputPath: string; outputPath: string }[]) => {
+  const results: { fileName: string; success: boolean; outputPath?: string; error?: string }[] = [];
+  let successCount = 0;
+  
+  for (const f of files) {
+    const { inputPath, outputPath } = f;
+    const fileName = inputPath.split(/[\\/]/).pop() || 'unknown.pptx';
     
-    writeFileSync(outputPath, pdfBuffer);
-    log.info(`Converted ${filePath} to ${outputPath}`);
-    
-    return { success: true, pdfPath: outputPath };
-  } catch (error) {
-    log.error('Error converting document:', error);
-    return { success: false, error: String(error) };
+    try {
+      const outputDir = dirname(outputPath);
+      if (!existsSync(outputDir)) {
+        mkdirSync(outputDir, { recursive: true });
+      }
+      
+      const { convert } = await import('pptx-to-pdf');
+      const pptxBuffer = readFileSync(inputPath);
+      const pdfBuffer = await convert(pptxBuffer);
+      writeFileSync(outputPath, pdfBuffer);
+      log.info(`Converted ${inputPath} to ${outputPath}`);
+      results.push({ fileName, success: true, outputPath });
+      successCount++;
+    } catch (error) {
+      log.error(`Error converting ${inputPath}:`, error);
+      results.push({ fileName, success: false, outputPath, error: String(error) });
+    }
   }
+  
+  return {
+    success: true,
+    totalFiles: files.length,
+    successCount,
+    failedCount: files.length - successCount,
+    results
+  };
 })
 
 app.whenReady().then(async () => {

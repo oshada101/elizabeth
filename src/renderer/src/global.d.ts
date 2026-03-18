@@ -29,8 +29,8 @@ interface ApiKeysApi {
 }
 
 interface ConvertDocumentApi {
-    analyze: (filePath: string) => Promise<{ type: string; fileName?: string; outputPath?: string; fileSize?: number; error?: string }>;
-    execute: (filePath: string, outputPath: string) => Promise<{ success: boolean; pdfPath?: string; error?: string }>;
+    analyze: (files: { filePath: string; outputPath?: string }[]) => Promise<{ type: string; files?: { filePath: string; outputPath: string; fileName: string; fileSize: number }[]; totalFiles?: number; totalSize?: number; errors?: string[]; error?: string }>;
+    execute: (files: { inputPath: string; outputPath: string }[]) => Promise<{ success: boolean; totalFiles: number; successCount: number; failedCount: number; results: { fileName: string; success: boolean; outputPath?: string; error?: string }[] }>;
 }
 
 interface ElectronAPI {

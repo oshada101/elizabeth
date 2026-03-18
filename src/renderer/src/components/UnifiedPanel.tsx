@@ -60,9 +60,9 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
 
     // Convert confirmation state
     const [convertPlan, setConvertPlan] = useState<{
-        fileName: string;
-        outputPath: string;
-        fileSize: number;
+        files: { filePath: string; outputPath: string; fileName: string; fileSize: number }[];
+        totalFiles: number;
+        totalSize: number;
     } | null>(null);
 
     // Session management state
@@ -156,11 +156,11 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
                         }
                         
                         const output = JSON.parse(outputContent);
-                        if (output.type === 'convert_plan' && output.fileName) {
+                        if (output.type === 'convert_plan' && output.files && output.files.length > 0) {
                             setConvertPlan({
-                                fileName: output.fileName,
-                                outputPath: output.outputPath,
-                                fileSize: output.fileSize
+                                files: output.files,
+                                totalFiles: output.totalFiles,
+                                totalSize: output.totalSize
                             });
                         }
                     } catch (e) {
@@ -315,25 +315,28 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
     const handleConvertConfirm = useCallback(async () => {
         if (!convertPlan || !sessionId) return;
         
-        const { fileName, outputPath } = convertPlan;
-        const inputPath = outputPath.replace(/\.pdf$/, '.pptx');
+        const { files } = convertPlan;
         setConvertPlan(null);
         setLoading(true);
         
         try {
-            const result = await window.electronAPI.convertDocument.execute(inputPath, outputPath);
+            const filesToConvert = files.map(f => ({
+                inputPath: f.filePath,
+                outputPath: f.outputPath
+            }));
+            const result = await window.electronAPI.convertDocument.execute(filesToConvert);
             
             let responseMsg = "";
             if (result.success) {
-                responseMsg = `Successfully converted "${fileName}" to PDF: ${result.pdfPath}`;
+                responseMsg = `Successfully converted ${result.successCount}/${result.totalFiles} files. Failed: ${result.failedCount}`;
             } else {
-                responseMsg = `Error converting document: ${result.error}`;
+                responseMsg = `Error converting documents`;
             }
             
             await window.electronAPI.addMessage(sessionId, "assistant", responseMsg);
             await loadMessages();
         } catch (e) {
-            await window.electronAPI.addMessage(sessionId, "assistant", "Error: Failed to convert document");
+            await window.electronAPI.addMessage(sessionId, "assistant", "Error: Failed to convert documents");
             await loadMessages();
         }
         
@@ -745,13 +748,26 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
                         </div>
                         
                         <div className="text-sm text-emerald-300 mb-3">
-                            <p className="mb-2">Convert <span className="text-emerald-200">{convertPlan.fileName}</span></p>
-                            <p className="text-emerald-400/70">Output: {convertPlan.outputPath}</p>
-                            {convertPlan.fileSize && (
-                                <p className="text-emerald-400/70 text-xs mt-1">
-                                    Size: {Math.round(convertPlan.fileSize / 1024)} KB
+                            <p className="mb-2">Convert <span className="text-emerald-200">{convertPlan.totalFiles} file(s)</span></p>
+                            {convertPlan.totalSize && (
+                                <p className="text-emerald-400/70 text-xs">
+                                    Total size: {Math.round(convertPlan.totalSize / 1024)} KB
                                 </p>
                             )}
+                        </div>
+
+                        <div className="space-y-2 mb-4 max-h-40 overflow-y-auto">
+                            {convertPlan.files.map((file, idx) => (
+                                <div key={idx} className="bg-white/5 rounded-lg p-2">
+                                    <div className="flex items-center gap-2 text-emerald-200 text-sm">
+                                        <svg className="w-4 h-4 text-emerald-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                                        </svg>
+                                        <span className="truncate flex-1">{file.fileName}</span>
+                                        <span className="text-emerald-400/70 text-xs">→ {file.outputPath.split(/[\\/]/).pop()}</span>
+                                    </div>
+                                </div>
+                            ))}
                         </div>
 
                         <div className="flex gap-2">

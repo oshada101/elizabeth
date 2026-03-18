@@ -121,10 +121,10 @@ const api = {
         organizeFolder: (options: { targetPath: string; action: string; strategy?: string; flatten?: boolean }): Promise<{ cancelled?: boolean; success?: boolean; moved?: number; strategy?: string; error?: string }> => ipcRenderer.invoke("fs:organize-folder", options),
     },
     convertDocument: {
-        analyze: (filePath: string): Promise<{ type: string; fileName?: string; outputPath?: string; fileSize?: number; error?: string }> => 
-            ipcRenderer.invoke("convert-document:analyze", filePath),
-        execute: (filePath: string, outputPath: string): Promise<{ success: boolean; pdfPath?: string; error?: string }> => 
-            ipcRenderer.invoke("convert-document:execute", filePath, outputPath),
+        analyze: (files: { filePath: string; outputPath?: string }[]): Promise<{ type: string; files?: { filePath: string; outputPath: string; fileName: string; fileSize: number }[]; totalFiles?: number; totalSize?: number; errors?: string[]; error?: string }> => 
+            ipcRenderer.invoke("convert-document:analyze", files),
+        execute: (files: { inputPath: string; outputPath: string }[]): Promise<{ success: boolean; totalFiles: number; successCount: number; failedCount: number; results: { fileName: string; success: boolean; outputPath?: string; error?: string }[] }> => 
+            ipcRenderer.invoke("convert-document:execute", files),
     },
     windowMinimize: () => ipcRenderer.invoke("window-minimize"),
     windowMaximize: () => ipcRenderer.invoke("window-maximize"),

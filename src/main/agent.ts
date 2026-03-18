@@ -22,7 +22,7 @@ import {
 import { db } from './db';
 import { app, dialog } from 'electron';
 import { join, dirname } from 'path';
-import { existsSync, readdirSync, statSync, mkdirSync, renameSync, rmSync } from 'fs';
+import { existsSync, readdirSync, statSync, readFileSync, writeFileSync, mkdirSync, renameSync, rmSync } from 'fs';
 import log from 'electron-log';
 
 
@@ -687,38 +687,77 @@ export async function invokeAgent(messages: Array<{ role: string; content: strin
     );
 
     const convertDocumentTool = tool(
-        async (input: { action: string; filePath: string; outputPath?: string }) => {
-            const { action, filePath, outputPath } = input;
+        async (input: { action: string; files: { filePath: string; outputPath?: string }[] }) => {
+            const { action, files } = input;
             const { existsSync, statSync, readFileSync, writeFileSync } = await import('fs');
             
             if (action === "analyze") {
-                const ext = filePath.toLowerCase().split('.').pop();
-                if (ext !== 'pptx' && ext !== 'ppt') {
-                    return JSON.stringify({ type: "convert_plan", error: 'Not a PowerPoint file' });
+                const validFiles: { filePath: string; outputPath: string; fileName: string; fileSize: number }[] = [];
+                const errors: string[] = [];
+                
+                for (const f of files) {
+                    const filePath = f.filePath;
+                    const ext = filePath.toLowerCase().split('.').pop();
+                    
+                    if (ext !== 'pptx' && ext !== 'ppt') {
+                        errors.push(`${filePath}: Not a PowerPoint file`);
+                        continue;
+                    }
+                    if (!existsSync(filePath)) {
+                        errors.push(`${filePath}: File not found`);
+                        continue;
+                    }
+                    
+                    const stats = statSync(filePath);
+                    const fileName = filePath.split(/[\\/]/).pop() || 'unknown.pptx';
+                    const outputPath = f.outputPath || filePath.replace(/\.[^.]+$/, '.pdf');
+                    
+                    validFiles.push({
+                        filePath,
+                        outputPath,
+                        fileName,
+                        fileSize: stats.size
+                    });
                 }
-                if (!existsSync(filePath)) {
-                    return JSON.stringify({ type: "convert_plan", error: 'File not found' });
-                }
-                const stats = statSync(filePath);
-                const fileName = filePath.split(/[\\/]/).pop() || 'unknown.pptx';
-                const targetPath = outputPath || filePath.replace(/\.[^.]+$/, '.pdf');
+                
+                const totalSize = validFiles.reduce((sum, f) => sum + f.fileSize, 0);
+                
                 return JSON.stringify({
                     type: "convert_plan",
-                    fileName,
-                    outputPath: targetPath,
-                    fileSize: stats.size
+                    files: validFiles,
+                    totalFiles: validFiles.length,
+                    totalSize,
+                    errors: errors.length > 0 ? errors : undefined
                 });
             } else if (action === "convert") {
-                const targetPath = outputPath || filePath.replace(/\.[^.]+$/, '.pdf');
-                try {
-                    const { convert } = await import('pptx-to-pdf');
-                    const pptxBuffer = readFileSync(filePath);
-                    const pdfBuffer = await convert(pptxBuffer);
-                    writeFileSync(targetPath, pdfBuffer);
-                    return `Successfully converted to PDF: ${targetPath}`;
-                } catch (error) {
-                    return `Error converting document: ${String(error)}`;
+                const { dirname } = await import('path');
+                const results: { fileName: string; success: boolean; outputPath?: string; error?: string }[] = [];
+                let successCount = 0;
+                
+                for (const f of files) {
+                    const filePath = f.filePath;
+                    const outputPath = f.outputPath || filePath.replace(/\.[^.]+$/, '.pdf');
+                    const fileName = filePath.split(/[\\/]/).pop() || 'unknown.pptx';
+                    
+                    try {
+                        const outputDir = dirname(outputPath);
+                        if (!existsSync(outputDir)) {
+                            mkdirSync(outputDir, { recursive: true });
+                        }
+                        
+                        const { convert } = await import('pptx-to-pdf');
+                        const pptxBuffer = readFileSync(filePath);
+                        const pdfBuffer = await convert(pptxBuffer);
+                        writeFileSync(outputPath, pdfBuffer);
+                        results.push({ fileName, success: true, outputPath });
+                        successCount++;
+                    } catch (error) {
+                        results.push({ fileName, success: false, outputPath, error: String(error) });
+                    }
                 }
+                
+                const failedCount = results.filter(r => !r.success).length;
+                return `Successfully converted ${successCount}/${files.length} files. Failed: ${failedCount}`;
             }
             return "Invalid action. Use 'analyze' or 'convert'.";
         },
@@ -727,8 +766,10 @@ export async function invokeAgent(messages: Array<{ role: string; content: strin
             description: "Convert PowerPoint (PPTX) files to PDF format. Use 'analyze' to preview the conversion, 'convert' to execute after user confirms.",
             schema: z.object({
                 action: z.enum(["analyze", "convert"]).describe("Action: 'analyze' to preview conversion, 'convert' to execute (only after user confirms)"),
-                filePath: z.string().describe("Path to the PowerPoint file (.pptx or .ppt)"),
-                outputPath: z.string().optional().describe("Output PDF path (default: same directory with .pdf extension)")
+                files: z.array(z.object({
+                    filePath: z.string().describe("Path to the PowerPoint file (.pptx or .ppt)"),
+                    outputPath: z.string().optional().describe("Output PDF path (default: same directory with .pdf extension)")
+                })).describe("Array of files to convert")
             }),
         },
     );
