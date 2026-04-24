@@ -118,7 +118,9 @@ const api = {
         moveFile: (oldPath: string, newPath: string): Promise<{ success: boolean; error?: string }> => ipcRenderer.invoke("fs:move-file", oldPath, newPath),
         createDirectory: (dirPath: string): Promise<{ success: boolean; error?: string }> => ipcRenderer.invoke("fs:create-directory", dirPath),
         delete: (targetPath: string): Promise<{ success: boolean; error?: string }> => ipcRenderer.invoke("fs:delete", targetPath),
-        organizeFolder: (options: { targetPath: string; action: string; strategy?: string; flatten?: boolean }): Promise<{ cancelled?: boolean; success?: boolean; moved?: number; strategy?: string; error?: string }> => ipcRenderer.invoke("fs:organize-folder", options),
+        organizeFolder: (options: { targetPath: string; action: string; strategy?: string; flatten?: boolean; customGroups?: { folder: string; filePaths: string[] }[] }): Promise<{ cancelled?: boolean; success?: boolean; moved?: number; strategy?: string; error?: string }> => ipcRenderer.invoke("fs:organize-folder", options),
+        deleteFiles: (files: string[]): Promise<{ success: boolean; successCount: number; failedCount: number; results: { path: string; success: boolean; error?: string }[] }> => ipcRenderer.invoke("fs:delete-files", files),
+        moveFiles: (moves: { from: string; to: string }[]): Promise<{ success: boolean; successCount: number; failedCount: number; results: { from: string; to: string; success: boolean; error?: string }[] }> => ipcRenderer.invoke("fs:move-files", moves),
     },
     convertDocument: {
         analyze: (files: { filePath: string; outputPath?: string }[]): Promise<{ type: string; files?: { filePath: string; outputPath: string; fileName: string; fileSize: number }[]; totalFiles?: number; totalSize?: number; errors?: string[]; error?: string }> => 

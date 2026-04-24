@@ -453,75 +453,49 @@ export async function invokeAgent(messages: Array<{ role: string; content: strin
     );
 
     const listAllFilesTool = tool(
-        async (input: { directoryPath?: string }) => {
-            const dirPath = input.directoryPath || currentPath || "";
-            if (!dirPath) {
-                return "No directory path provided.";
-            }
-            
-            interface TreeEntry {
-                name: string;
-                path: string;
-                isDirectory: boolean;
-                children?: TreeEntry[];
-                size?: number;
-            }
-            
-            function scanDir(path: string): TreeEntry[] {
-                const entries = readdirSync(path, { withFileTypes: true });
-                return entries.map(entry => {
-                    const fullPath = join(path, entry.name);
-                    const stats = statSync(fullPath);
+        async (input: { folders: string[] }) => {
+            const results: string[] = [];
+
+            for (const dirPath of input.folders) {
+                if (!existsSync(dirPath)) {
+                    results.push(`Not found: ${dirPath}`);
+                    continue;
+                }
+
+                const entries = readdirSync(dirPath, { withFileTypes: true });
+                if (entries.length === 0) {
+                    results.push(`Empty: ${dirPath}`);
+                    continue;
+                }
+
+                const lines = entries.map(entry => {
+                    const fullPath = join(dirPath, entry.name);
                     if (entry.isDirectory()) {
-                        return {
-                            name: entry.name,
-                            path: fullPath,
-                            isDirectory: true,
-                            children: scanDir(fullPath)
-                        };
+                        return `📁 ${entry.name}/`;
                     }
-                    return {
-                        name: entry.name,
-                        path: fullPath,
-                        isDirectory: false,
-                        size: stats.size
-                    };
+                    const stats = statSync(fullPath);
+                    const sizeKB = Math.round(stats.size / 1024);
+                    return `📄 ${entry.name} (${sizeKB}KB)`;
                 });
+
+                results.push(`${dirPath}:\n${lines.join("\n")}`);
             }
-            
-            const tree = scanDir(dirPath);
-            if (tree.length === 0) {
-                return `Directory is empty: ${dirPath}`;
-            }
-            
-            function formatTree(entries: TreeEntry[], prefix = ""): string {
-                return entries.map(entry => {
-                    const icon = entry.isDirectory ? "📁" : "📄";
-                    const size = entry.size ? ` (${Math.round(entry.size / 1024)}KB)` : "";
-                    const line = `${prefix}${icon} ${entry.name}${size}`;
-                    if (entry.children && entry.children.length > 0) {
-                        return line + "\n" + formatTree(entry.children, prefix + "  ");
-                    }
-                    return line;
-                }).join("\n");
-            }
-            
-            return `Files in ${dirPath}:\n${formatTree(tree)}`;
+
+            return results.join("\n\n");
         },
         {
             name: "list_all_files",
-            description: "List ALL files and folders in a directory (including non-PDF files). Use this to see everything in a folder.",
+            description: "List ALL files and folders (including non-PDFs) in specific folders. ALWAYS ask the user which folder(s) they want to list before calling this tool — do not assume.",
             schema: z.object({
-                directoryPath: z.string().optional().describe("The directory path to list. Uses current path if not specified."),
+                folders: z.array(z.string()).describe("Full paths of the folders to list (one level deep, no recursion)"),
             }),
         },
     );
 
     const organizeFolderTool = tool(
-        async (input: { action: string; targetPath: string; strategy?: string; includeSubfolders?: boolean; flatten?: boolean }) => {
+        async (input: { action: string; targetPath: string; strategy?: string; includeSubfolders?: boolean; flatten?: boolean; customGroups?: { folder: string; files: string[]; filePaths: string[] }[] }) => {
             const { targetPath, strategy = 'type', includeSubfolders = true, flatten = false } = input;
-            
-            // Recursively get all files in directory and subdirectories
+
             function getAllFiles(dirPath: string): string[] {
                 const allFiles: string[] = [];
                 try {
@@ -529,9 +503,7 @@ export async function invokeAgent(messages: Array<{ role: string; content: strin
                     for (const entry of entries) {
                         const fullPath = join(dirPath, entry.name);
                         if (entry.isDirectory()) {
-                            if (includeSubfolders) {
-                                allFiles.push(...getAllFiles(fullPath));
-                            }
+                            if (includeSubfolders) allFiles.push(...getAllFiles(fullPath));
                         } else {
                             allFiles.push(fullPath);
                         }
@@ -541,15 +513,57 @@ export async function invokeAgent(messages: Array<{ role: string; content: strin
                 }
                 return allFiles;
             }
-            
+
+            // Semantic: return file list + PDF content snippets for LLM to propose groupings
+            if (input.action === "semantic_analyze") {
+                const allFiles = getAllFiles(targetPath);
+                const allDocs = getAllDocuments();
+                const fileData = await Promise.all(allFiles.map(async (filePath) => {
+                    const fileName = filePath.split(/[\\/]/).pop() || '';
+                    const ext = fileName.split('.').pop()?.toLowerCase() || '';
+                    let snippet = '';
+                    if (ext === 'pdf') {
+                        const docInfo = allDocs.find(d => d.file_path === filePath);
+                        if (docInfo) {
+                            try {
+                                const results = await vectorStore.similaritySearch(fileName.replace(/\.pdf$/i, ''), 5);
+                                const filtered = results.filter((d: Document) => d.metadata.document_id === docInfo.id);
+                                snippet = filtered.slice(0, 2).map((d: Document) => d.pageContent.substring(0, 150)).join(' ... ');
+                            } catch (e) {}
+                        }
+                    }
+                    const stats = statSync(filePath);
+                    return { path: filePath, name: fileName, ext, snippet, sizeKB: Math.round(stats.size / 1024) };
+                }));
+                return JSON.stringify({
+                    type: "semantic_data",
+                    targetPath,
+                    files: fileData,
+                    instruction: "Analyze these files and their content snippets. Propose semantic folder groupings. Then call organize_folder with action='analyze' and customGroups=[{folder:'FolderName', files:['file.pdf'], filePaths:['/full/path/file.pdf']}]"
+                });
+            }
+
+            // Analyze with custom groups (after semantic propose)
+            if (input.action === "analyze" && input.customGroups) {
+                const totalFiles = input.customGroups.reduce((sum, g) => sum + g.files.length, 0);
+                return JSON.stringify({
+                    type: "organize_plan",
+                    targetPath,
+                    strategy: "semantic",
+                    flatten: false,
+                    groups: input.customGroups,
+                    totalFiles
+                });
+            }
+
+            // Standard analyze
             if (input.action === "analyze") {
                 const allFiles = getAllFiles(targetPath);
-                const groups: Record<string, string[]> = {};
-                
+                const groups: Record<string, { files: string[]; filePaths: string[] }> = {};
+
                 for (const filePath of allFiles) {
                     const fileName = filePath.split(/[\\/]/).pop() || '';
                     let groupKey: string;
-                    
                     if (flatten) {
                         groupKey = "Root";
                     } else if (strategy === 'type') {
@@ -562,126 +576,43 @@ export async function invokeAgent(messages: Array<{ role: string; content: strin
                         const nameParts = fileName.split(/[\s_-]/);
                         groupKey = nameParts[0] || 'Other';
                     }
-                    
-                    if (!groups[groupKey]) groups[groupKey] = [];
-                    groups[groupKey].push(fileName);
+                    if (!groups[groupKey]) groups[groupKey] = { files: [], filePaths: [] };
+                    groups[groupKey].files.push(fileName);
+                    groups[groupKey].filePaths.push(filePath);
                 }
-                
+
                 const subfolders = includeSubfolders ? readdirSync(targetPath, { withFileTypes: true }).filter(e => e.isDirectory()).map(e => e.name) : [];
-                
                 return JSON.stringify({
                     type: "organize_plan",
                     targetPath,
                     strategy,
                     flatten,
-                    groups: Object.entries(groups).map(([group, files]) => ({
+                    groups: Object.entries(groups).map(([group, data]) => ({
                         folder: group,
-                        files
+                        files: data.files,
+                        filePaths: data.filePaths
                     })),
                     subfoldersScanned: subfolders,
                     totalFiles: allFiles.length
                 });
             }
-            
-            // Organize action
-            const allFiles = getAllFiles(targetPath);
-            const groups: Record<string, string[]> = {};
-            
-            for (const filePath of allFiles) {
-                const fileName = filePath.split(/[\\/]/).pop() || '';
-                let groupKey: string;
-                
-                if (flatten) {
-                    groupKey = "Root";
-                } else if (strategy === 'type') {
-                    const ext = fileName.split('.').pop()?.toLowerCase() || 'unknown';
-                    groupKey = ext === 'pdf' ? 'PDFs' : ext.toUpperCase() + 's';
-                } else if (strategy === 'date') {
-                    const stats = statSync(filePath);
-                    groupKey = stats.mtime.getFullYear().toString();
-                } else {
-                    const nameParts = fileName.split(/[\s_-]/);
-                    groupKey = nameParts[0] || 'Other';
-                }
-                
-                if (!groups[groupKey]) groups[groupKey] = [];
-                groups[groupKey].push(filePath);
-            }
-            
-            const results: { oldPath: string; newPath: string }[] = [];
-            
-            if (flatten) {
-                // Move all files to root (targetPath), handling name conflicts
-                const usedNames = new Set<string>();
-                for (const oldPath of allFiles) {
-                    let fileName = oldPath.split(/[\\/]/).pop() || '';
-                    let baseName = fileName.replace(/\.[^.]+$/, '');
-                    let ext = fileName.includes('.') ? '.' + fileName.split('.').pop() : '';
-                    
-                    let newName = fileName;
-                    let counter = 1;
-                    while (usedNames.has(newName)) {
-                        newName = `${baseName}_${counter}${ext}`;
-                        counter++;
-                    }
-                    usedNames.add(newName);
-                    
-                    const newPath = join(targetPath, newName);
-                    if (oldPath !== newPath) {
-                        renameSync(oldPath, newPath);
-                        if (oldPath.toLowerCase().endsWith('.pdf')) {
-                            updateDocumentPath(oldPath, newPath);
-                        }
-                        results.push({ oldPath, newPath });
-                    }
-                }
-                
-                // Clean up empty subfolders
-                try {
-                    const entries = readdirSync(targetPath, { withFileTypes: true });
-                    for (const entry of entries) {
-                        if (entry.isDirectory()) {
-                            const subPath = join(targetPath, entry.name);
-                            const subFiles = readdirSync(subPath);
-                            if (subFiles.length === 0) {
-                                rmSync(subPath, { recursive: true });
-                            }
-                        }
-                    }
-                } catch (e) {}
-            } else {
-                // Organize into subfolders
-                for (const [group, paths] of Object.entries(groups)) {
-                    const groupDir = join(targetPath, group);
-                    if (!existsSync(groupDir)) {
-                        mkdirSync(groupDir, { recursive: true });
-                    }
-                    
-                    for (const oldPath of paths) {
-                        const fileName = oldPath.split(/[\\/]/).pop() || '';
-                        const newPath = join(groupDir, fileName);
-                        if (oldPath !== newPath) {
-                            renameSync(oldPath, newPath);
-                            if (oldPath.toLowerCase().endsWith('.pdf')) {
-                                updateDocumentPath(oldPath, newPath);
-                            }
-                            results.push({ oldPath, newPath });
-                        }
-                    }
-                }
-            }
-            
-            return `Successfully organized ${results.length} files.`;
+
+            return "Use action 'analyze' for standard grouping preview, or 'semantic_analyze' to get content data for AI-proposed groupings. Execution happens via the UI confirmation.";
         },
         {
             name: "organize_folder",
-            description: "Analyze or reorganize files in a folder by type, date, or name. Use 'analyze' action to see suggestions, or 'organize' to actually move files.",
+            description: "Analyze or reorganize files in a folder. Use 'analyze' for standard strategies (type/date/name/flatten), 'semantic_analyze' to get file content data so you can propose smart semantic groupings.",
             schema: z.object({
-                action: z.enum(["analyze", "organize"]).describe("The action to perform: 'analyze' to scan and show suggestions, 'organize' to move files to organized folders"),
+                action: z.enum(["analyze", "semantic_analyze"]).describe("'analyze' for standard grouping preview (or custom with customGroups), 'semantic_analyze' to fetch content data for semantic grouping"),
                 targetPath: z.string().describe("The folder path to organize"),
-                strategy: z.enum(["type", "date", "name"]).optional().describe("How to group files: 'type' (by file extension), 'date' (by year), 'name' (by first word)"),
+                strategy: z.enum(["type", "date", "name"]).optional().describe("How to group: 'type' (by extension), 'date' (by year), 'name' (by first word)"),
                 includeSubfolders: z.boolean().optional().describe("Include files from subfolders (default: true)"),
-                flatten: z.boolean().optional().describe("Flatten: move all files to root directory, removing subfolders (default: false)")
+                flatten: z.boolean().optional().describe("Move all files to root, removing subfolders (default: false)"),
+                customGroups: z.array(z.object({
+                    folder: z.string().describe("Subfolder name to create"),
+                    files: z.array(z.string()).describe("File display names for UI"),
+                    filePaths: z.array(z.string()).describe("Full file paths for execution")
+                })).optional().describe("Custom file-to-folder mapping (use with action='analyze' after semantic_analyze)")
             }),
         },
     );
@@ -774,28 +705,144 @@ export async function invokeAgent(messages: Array<{ role: string; content: strin
         },
     );
 
+    const moveFilesTool = tool(
+        async (input: { moves: { from: string; to: string }[] }) => {
+            const validMoves: { from: string; to: string; fileName: string }[] = [];
+            const errors: string[] = [];
+            for (const move of input.moves) {
+                if (!existsSync(move.from)) {
+                    errors.push(`${move.from}: File not found`);
+                    continue;
+                }
+                const fileName = move.from.split(/[\\/]/).pop() || '';
+                validMoves.push({ from: move.from, to: move.to, fileName });
+            }
+            return JSON.stringify({
+                type: "move_plan",
+                moves: validMoves,
+                errors: errors.length > 0 ? errors : undefined
+            });
+        },
+        {
+            name: "move_files",
+            description: "Move specific files to new locations. Returns a move plan for user confirmation. Use when user explicitly wants to move specific files.",
+            schema: z.object({
+                moves: z.array(z.object({
+                    from: z.string().describe("Source file path (full path)"),
+                    to: z.string().describe("Destination file path (full path including filename)")
+                })).describe("List of file moves to perform")
+            })
+        }
+    );
+
+    const renameFileTool = tool(
+        async (input: { oldPath: string; newName: string }) => {
+            if (!existsSync(input.oldPath)) {
+                return JSON.stringify({ type: "rename_plan", error: `File not found: ${input.oldPath}` });
+            }
+            const dir = dirname(input.oldPath);
+            const newPath = join(dir, input.newName);
+            const oldName = input.oldPath.split(/[\\/]/).pop() || '';
+            return JSON.stringify({
+                type: "rename_plan",
+                oldPath: input.oldPath,
+                newPath,
+                oldName,
+                newName: input.newName
+            });
+        },
+        {
+            name: "rename_file",
+            description: "Rename a file or folder. Returns a rename plan for user confirmation.",
+            schema: z.object({
+                oldPath: z.string().describe("Full path of the file/folder to rename"),
+                newName: z.string().describe("New name (filename only, not the full path)")
+            })
+        }
+    );
+
+    const deleteFilesTool = tool(
+        async (input: { files: string[] }) => {
+            const validFiles: { path: string; name: string; isDirectory: boolean; size?: number }[] = [];
+            const errors: string[] = [];
+            for (const filePath of input.files) {
+                if (!existsSync(filePath)) {
+                    errors.push(`${filePath}: Not found`);
+                    continue;
+                }
+                const stats = statSync(filePath);
+                validFiles.push({
+                    path: filePath,
+                    name: filePath.split(/[\\/]/).pop() || '',
+                    isDirectory: stats.isDirectory(),
+                    size: stats.isDirectory() ? undefined : stats.size
+                });
+            }
+            return JSON.stringify({
+                type: "delete_plan",
+                files: validFiles,
+                errors: errors.length > 0 ? errors : undefined
+            });
+        },
+        {
+            name: "delete_files",
+            description: "Delete files or folders. ONLY use when user EXPLICITLY says to delete/remove something. Returns a delete plan requiring user confirmation — nothing is deleted until confirmed.",
+            schema: z.object({
+                files: z.array(z.string()).describe("Full paths of files/folders to delete")
+            })
+        }
+    );
+
+    const createFolderTool = tool(
+        async (input: { path: string }) => {
+            if (existsSync(input.path)) {
+                return `Folder already exists: ${input.path}`;
+            }
+            mkdirSync(input.path, { recursive: true });
+            return `Created folder: ${input.path}`;
+        },
+        {
+            name: "create_folder",
+            description: "Create a new folder at the specified path. Executes immediately (safe, non-destructive).",
+            schema: z.object({
+                path: z.string().describe("Full path of the folder to create")
+            })
+        }
+    );
+
+    const currentDocId = getCurrentDocumentId();
+    const currentDoc = currentDocId ? getDocumentByHash(currentDocId) : null;
+    const currentDocName = currentDoc ? currentDoc.file_name : null;
+
     const agent = createAgent({
         model,
-        tools: [searchCurrentDocTool, searchDirTool, searchAllDocsTool, listFilesTool, listAllFilesTool, organizeFolderTool, convertDocumentTool],
+        tools: [searchCurrentDocTool, searchDirTool, searchAllDocsTool, listFilesTool, listAllFilesTool, organizeFolderTool, convertDocumentTool, moveFilesTool, renameFileTool, deleteFilesTool, createFolderTool],
         systemPrompt: `You are a helpful AI assistant with access to the user's PDF document library.
 
-You have seven tools, use them according to these STRICT rules:
-1. When the user asks about "this document" or "the current document", use the 'search_current' tool to search only the currently open PDF.
-2. Use the 'list_directory_files' tool to list only embedded PDFs in a directory.
-3. Use 'list_all_files' to see ALL files (including non-PDFs) in a directory, or to explore folder structure.
-4. By DEFAULT, for ANY general question about their files, use the 'search_directory' tool. This restricts your search to the user's active folder context.
-5. If you cannot find what you're looking for, or if the user explicitly asks to search "all my files" or " everywhere", you MUST ASK FOR PERMISSION FIRST before using the 'search_all' tool. Once they say "yes" or give explicit consent, use 'search_all' with request_permission: true.
+Current active folder: ${currentPath || "none"}
+Currently open document: ${currentDocName || "none"}
+
+When the user navigates to a new folder, your active folder changes. Always use the current active folder shown above as your working context — do not assume you are still in a previous folder.
+
+You have eleven tools. Use them according to these STRICT rules:
+1. When the user asks about "this document" or "the current document", use 'search_current' to search only the currently open PDF.
+2. Use 'list_directory_files' to list only embedded PDFs in a directory.
+3. Use 'list_all_files' to see ALL files (including non-PDFs) in specific folders. ALWAYS ask the user which folder(s) to list first — never assume.
+4. By DEFAULT, for ANY general question about their files, use 'search_directory'. This restricts your search to the user's active folder context.
+5. If you cannot find what you're looking for, or if the user explicitly asks to search "all my files" or "everywhere", you MUST ASK FOR PERMISSION FIRST before using 'search_all'. Once they say "yes", use 'search_all' with request_permission: true.
 6. FOLDER ORGANIZATION - Only use when user EXPLICITLY asks to "organize" or "reorganize":
-   - The user must say "organize" or "reorganize" (not just ask about files or ask what tools are available)
-   - When they explicitly ask, use 'organize_folder' with action "analyze" to see the proposed structure
-   - The UI will show a confirmation dialog with the plan. When they click "Confirm", the organization will happen automatically.
-   - DO NOT suggest organization or use this tool unless the user explicitly asks for it.
-   - Available strategies: 'type' (by file extension), 'date' (by year), 'name' (by first word), or 'flatten' (move all to root)
+   - Use 'organize_folder' with action "analyze" and a strategy (type/date/name/flatten) to see the proposed structure.
+   - For SEMANTIC organization (by topic/content): first call 'organize_folder' with action='semantic_analyze' to get file data and content snippets, then propose groupings yourself, then call 'organize_folder' with action='analyze' and customGroups=[{folder:'Name', files:['file.pdf'], filePaths:['/full/path/file.pdf']}].
+   - The UI will show a confirmation dialog. DO NOT suggest organization unless explicitly asked.
 7. DOCUMENT CONVERSION - Only use when user EXPLICITLY asks to "convert" or "export" a PowerPoint to PDF:
-   - The user must say "convert" or "export" (not just ask about files)
-   - When they explicitly ask, use 'convert_document' with action "analyze" to preview the conversion
-   - The UI will show a confirmation dialog with file details. When they click "Convert", the conversion will happen automatically.
-   - DO NOT suggest conversion or use this tool unless the user explicitly asks for it.
+   - Use 'convert_document' with action "analyze" to preview. UI shows confirmation. DO NOT suggest unless explicitly asked.
+8. MOVE FILES - Only use 'move_files' when user explicitly asks to move specific files:
+   - Returns a move plan for UI confirmation. Nothing moves until user confirms.
+9. RENAME FILE - Only use 'rename_file' when user explicitly asks to rename:
+   - Returns a rename plan for UI confirmation.
+10. DELETE FILES - ONLY use 'delete_files' when user EXPLICITLY says "delete" or "remove":
+    - NEVER suggest deleting. Returns a delete plan requiring confirmation. Nothing is deleted until user confirms.
+11. CREATE FOLDER - Use 'create_folder' to create folders immediately. Safe, no confirmation needed.
 
 The search results will include document identifiers. Use these to reference which file information came from.`,
         checkpointer: saver,

@@ -8,61 +8,6 @@ import UnifiedPanel from "./components/UnifiedPanel";
 import React from "react";
 import * as pdfjsLib from "pdfjs-dist";
 
-declare global {
-    interface Window {
-        electronAPI: {
-            openFileDialog: () => Promise<string | null>;
-            readFile: (filePath: string) => Promise<Buffer | null>;
-            getSessions: () => Promise<Session[]>;
-            createSession: (pdfPath: string) => Promise<number | null>;
-            updateSession: (
-                sessionId: number,
-                pdfPath: string,
-            ) => Promise<void>;
-            getMessages: (sessionId: number) => Promise<Message[]>;
-            addMessage: (
-                sessionId: number,
-                role: string,
-                content: string,
-            ) => Promise<number>;
-            clearMessages: (sessionId: number) => Promise<void>;
-            deleteSession: (sessionId: number) => Promise<boolean>;
-            ask: (message: string, sessionId: number, currentPath: string) => Promise<any>;
-            onAgentChunk: (callback: (chunk: string) => void) => () => void;
-            onAgentTool: (callback: (toolCall: any) => void) => () => void;
-            onEmbeddingProgress: (callback: (progress: number) => void) => () => void;
-            embedDirectoryPdfs: (dirPath: string) => Promise<any>;
-            onBatchEmbeddingFileStart: (callback: (data: any) => void) => () => void;
-            onBatchEmbeddingFileProgress: (callback: (data: any) => void) => () => void;
-            onBatchEmbeddingFileDone: (callback: (data: any) => void) => () => void;
-            onBatchEmbeddingDone: (callback: (data: any) => void) => () => void;
-            loadPdfText: (pdfData: Uint8Array, filePath: string, sessionId: number) => Promise<string | null>;
-            documents: {
-                list: () => Promise<Array<{ id: string, file_name: string, file_path: string, total_chunks: number, last_accessed: string }>>;
-                switch: (hash: string) => Promise<boolean>;
-                current: () => Promise<string | null>;
-                delete: (hash: string) => Promise<boolean>;
-            };
-            fs: {
-                getHomeDir: () => Promise<string>;
-                getDefaultDir: () => Promise<string>;
-                readDir: (dirPath: string) => Promise<Array<{ name: string, path: string, isDirectory: boolean, size: number, modified: string }>>;
-                getParentDir: (dirPath: string) => Promise<string | null>;
-                exists: (filePath: string) => Promise<boolean>;
-            };
-            windowMinimize: () => Promise<void>;
-            windowMaximize: () => Promise<void>;
-            windowClose: () => Promise<void>;
-            apiKeys: {
-                save: (data: { account: string, provider: string, label: string, isDefault: boolean, models: string[], apiKey: string, baseUrl?: string }) => Promise<string>;
-                list: () => Promise<any[]>;
-                delete: (id: string) => Promise<void>;
-                setDefault: (id: string) => Promise<void>;
-                update: (id: string, data: { account?: string, provider?: string, label?: string, isDefault?: boolean, models?: string[], apiKey?: string, baseUrl?: string }) => Promise<void>;
-            };
-        };
-    }
-}
 
 export interface Session {
     id: number;

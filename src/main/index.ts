@@ -5,7 +5,7 @@ import { homedir } from 'os'
 import log from 'electron-log'
 import { db as appDb } from './db'
 import { invokeAgent, processPdfDocument, getEmbeddedDocuments, switchToDocument, getCurrentDocumentId, deleteEmbeddedDocument } from './agent'
-import { updateDocumentPath } from './documentRegistry'
+import { updateDocumentPath, getDocumentsByPath } from './documentRegistry'
 import * as keyManager from './keyManager'
 
 log.initialize()
@@ -482,9 +482,84 @@ ipcMain.handle('fs:delete', async (_, targetPath: string) => {
   }
 })
 
-ipcMain.handle('fs:organize-folder', async (event, options: { targetPath: string, action: string, strategy?: string, flatten?: boolean }) => {
+ipcMain.handle('fs:delete-files', async (_, files: string[]) => {
+  const results: { path: string; success: boolean; error?: string }[] = [];
+  for (const filePath of files) {
+    try {
+      if (!existsSync(filePath)) {
+        results.push({ path: filePath, success: false, error: 'Not found' });
+        continue;
+      }
+      const stats = statSync(filePath);
+      if (!stats.isDirectory() && filePath.toLowerCase().endsWith('.pdf')) {
+        const docs = getDocumentsByPath(filePath);
+        for (const doc of docs) {
+          if (doc.file_path === filePath) {
+            await deleteEmbeddedDocument(doc.id);
+          }
+        }
+      }
+      rmSync(filePath, { recursive: true, force: true });
+      results.push({ path: filePath, success: true });
+    } catch (e) {
+      log.error(`Error deleting ${filePath}:`, e);
+      results.push({ path: filePath, success: false, error: String(e) });
+    }
+  }
+  const successCount = results.filter(r => r.success).length;
+  return { success: successCount > 0, successCount, failedCount: results.length - successCount, results };
+})
+
+ipcMain.handle('fs:move-files', async (_, moves: { from: string; to: string }[]) => {
+  const results: { from: string; to: string; success: boolean; error?: string }[] = [];
+  for (const move of moves) {
+    try {
+      const destDir = dirname(move.to);
+      if (!existsSync(destDir)) {
+        mkdirSync(destDir, { recursive: true });
+      }
+      renameSync(move.from, move.to);
+      if (move.from.toLowerCase().endsWith('.pdf')) {
+        updateDocumentPath(move.from, move.to);
+      }
+      results.push({ from: move.from, to: move.to, success: true });
+    } catch (e) {
+      log.error(`Error moving ${move.from} to ${move.to}:`, e);
+      results.push({ from: move.from, to: move.to, success: false, error: String(e) });
+    }
+  }
+  const successCount = results.filter(r => r.success).length;
+  return { success: successCount > 0, successCount, failedCount: results.length - successCount, results };
+})
+
+ipcMain.handle('fs:organize-folder', async (event, options: { targetPath: string, action: string, strategy?: string, flatten?: boolean, customGroups?: { folder: string; filePaths: string[] }[] }) => {
   try {
     const { targetPath, strategy = 'type', flatten = false } = options;
+
+    // Custom groups (from semantic organize)
+    if (options.customGroups && options.customGroups.length > 0) {
+      const results: { oldPath: string; newPath: string }[] = [];
+      for (const group of options.customGroups) {
+        const groupDir = join(targetPath, group.folder);
+        if (!existsSync(groupDir)) {
+          mkdirSync(groupDir, { recursive: true });
+        }
+        for (const oldPath of group.filePaths) {
+          if (!existsSync(oldPath)) continue;
+          const fileName = oldPath.split(/[\\/]/).pop() || '';
+          const newPath = join(groupDir, fileName);
+          if (oldPath !== newPath) {
+            renameSync(oldPath, newPath);
+            if (oldPath.toLowerCase().endsWith('.pdf')) {
+              updateDocumentPath(oldPath, newPath);
+            }
+            results.push({ oldPath, newPath });
+          }
+        }
+      }
+      log.info(`Custom organized ${results.length} files`);
+      return { success: true, moved: results.length, strategy: 'custom' };
+    }
     
     function getAllFiles(dirPath: string): string[] {
       const allFiles: string[] = [];

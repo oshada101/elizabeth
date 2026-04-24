@@ -17,7 +17,9 @@ interface FsApi {
     moveFile: (oldPath: string, newPath: string) => Promise<{ success: boolean; error?: string }>;
     createDirectory: (dirPath: string) => Promise<{ success: boolean; error?: string }>;
     delete: (targetPath: string) => Promise<{ success: boolean; error?: string }>;
-    organizeFolder: (options: { targetPath: string; action: string; strategy?: string; flatten?: boolean }) => Promise<{ cancelled?: boolean; success?: boolean; moved?: number; strategy?: string; error?: string }>;
+    organizeFolder: (options: { targetPath: string; action: string; strategy?: string; flatten?: boolean; customGroups?: { folder: string; filePaths: string[] }[] }) => Promise<{ cancelled?: boolean; success?: boolean; moved?: number; strategy?: string; error?: string }>;
+    deleteFiles: (files: string[]) => Promise<{ success: boolean; successCount: number; failedCount: number; results: { path: string; success: boolean; error?: string }[] }>;
+    moveFiles: (moves: { from: string; to: string }[]) => Promise<{ success: boolean; successCount: number; failedCount: number; results: { from: string; to: string; success: boolean; error?: string }[] }>;
 }
 
 interface DocumentsApi {
@@ -57,6 +59,10 @@ interface ElectronAPI {
     loadPdfText: (pdfData: Uint8Array, filePath: string, sessionId: number) => Promise<string | null>;
     documents: DocumentsApi;
     fs: FsApi;
+    convertDocument: {
+        analyze: (files: { filePath: string; outputPath?: string }[]) => Promise<any>;
+        execute: (files: { inputPath: string; outputPath: string }[]) => Promise<any>;
+    };
     windowMinimize: () => void;
     windowMaximize: () => void;
     windowClose: () => void;

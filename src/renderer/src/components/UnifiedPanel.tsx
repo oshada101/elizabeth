@@ -61,7 +61,7 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
         targetPath: string;
         strategy: string;
         flatten: boolean;
-        groups: { folder: string; files: string[] }[];
+        groups: { folder: string; files: string[]; filePaths?: string[] }[];
         subfoldersScanned?: string[];
         totalFiles?: number;
     } | null>(null);
@@ -71,6 +71,24 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
         files: { filePath: string; outputPath: string; fileName: string; fileSize: number }[];
         totalFiles: number;
         totalSize: number;
+    } | null>(null);
+
+    // Move confirmation state
+    const [movePlan, setMovePlan] = useState<{
+        moves: { from: string; to: string; fileName: string }[];
+    } | null>(null);
+
+    // Rename confirmation state
+    const [renamePlan, setRenamePlan] = useState<{
+        oldPath: string;
+        newPath: string;
+        oldName: string;
+        newName: string;
+    } | null>(null);
+
+    // Delete confirmation state
+    const [deletePlan, setDeletePlan] = useState<{
+        files: { path: string; name: string; isDirectory: boolean; size?: number }[];
     } | null>(null);
 
     // Session management state
@@ -162,7 +180,7 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
                         } else {
                             outputContent = JSON.stringify(toolCall.output);
                         }
-                        
+
                         const output = JSON.parse(outputContent);
                         if (output.type === 'convert_plan' && output.files && output.files.length > 0) {
                             setConvertPlan({
@@ -174,6 +192,51 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
                     } catch (e) {
                         // Not JSON, ignore
                     }
+                }
+
+                // Check for move_plan
+                if (toolCall.name === 'move_files' && toolCall.output) {
+                    try {
+                        let outputContent: string;
+                        if (typeof toolCall.output === 'string') outputContent = toolCall.output;
+                        else if (toolCall.output.lc_kwargs?.content) outputContent = toolCall.output.lc_kwargs.content;
+                        else if (toolCall.output.content) outputContent = toolCall.output.content;
+                        else outputContent = JSON.stringify(toolCall.output);
+                        const output = JSON.parse(outputContent);
+                        if (output.type === 'move_plan' && output.moves && output.moves.length > 0) {
+                            setMovePlan({ moves: output.moves });
+                        }
+                    } catch (e) {}
+                }
+
+                // Check for rename_plan
+                if (toolCall.name === 'rename_file' && toolCall.output) {
+                    try {
+                        let outputContent: string;
+                        if (typeof toolCall.output === 'string') outputContent = toolCall.output;
+                        else if (toolCall.output.lc_kwargs?.content) outputContent = toolCall.output.lc_kwargs.content;
+                        else if (toolCall.output.content) outputContent = toolCall.output.content;
+                        else outputContent = JSON.stringify(toolCall.output);
+                        const output = JSON.parse(outputContent);
+                        if (output.type === 'rename_plan' && output.oldPath && !output.error) {
+                            setRenamePlan({ oldPath: output.oldPath, newPath: output.newPath, oldName: output.oldName, newName: output.newName });
+                        }
+                    } catch (e) {}
+                }
+
+                // Check for delete_plan
+                if (toolCall.name === 'delete_files' && toolCall.output) {
+                    try {
+                        let outputContent: string;
+                        if (typeof toolCall.output === 'string') outputContent = toolCall.output;
+                        else if (toolCall.output.lc_kwargs?.content) outputContent = toolCall.output.lc_kwargs.content;
+                        else if (toolCall.output.content) outputContent = toolCall.output.content;
+                        else outputContent = JSON.stringify(toolCall.output);
+                        const output = JSON.parse(outputContent);
+                        if (output.type === 'delete_plan' && output.files && output.files.length > 0) {
+                            setDeletePlan({ files: output.files });
+                        }
+                    } catch (e) {}
                 }
             }
         });
@@ -231,7 +294,7 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
 
     const parseMessage = (content: string): { mainText: string; attachedText: string | null } => {
         let mainText = content;
-        const contextMatch = mainText.match(/^\[System Context: .*?\]\n([\s\S]*)$/);
+        const contextMatch = mainText.match(/^\[System Context:[^\]]*\]\n([\s\S]*)$/);
         if (contextMatch) {
             mainText = contextMatch[1];
         }
@@ -247,7 +310,7 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
         if (!userInput.trim() || loading) return;
 
         const contextStr = mode === "explorer" ? "file explorer" : "document viewer";
-        const prefix = `[System Context: User is currently in ${contextStr} mode]\n`;
+        const prefix = `[System Context: User is currently in ${contextStr} mode. Current folder: ${currentPath}]\n`;
 
         const fullMessage = selectedText
             ? `${prefix}[[TEXT:${selectedText}]]\n${userInput}`
@@ -319,11 +382,18 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
         
         // Directly call the IPC handler to organize
         try {
+            const hasCustomGroups = organizePlan.groups.some(g => g.filePaths && g.filePaths.length > 0);
             const result = await window.electronAPI.fs.organizeFolder({
                 action: "organize",
                 targetPath,
                 strategy: strategy || 'type',
-                flatten: flatten || false
+                flatten: flatten || false,
+                ...(hasCustomGroups ? {
+                    customGroups: organizePlan.groups.map(g => ({
+                        folder: g.folder,
+                        filePaths: g.filePaths || []
+                    }))
+                } : {})
             });
             
             let responseMsg = "";
@@ -399,6 +469,75 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
     const handleConvertCancel = useCallback(() => {
         setConvertPlan(null);
     }, []);
+
+    const handleMoveConfirm = useCallback(async () => {
+        if (!movePlan || !sessionId) return;
+        const { moves } = movePlan;
+        setMovePlan(null);
+        setLoading(true);
+        try {
+            const result = await window.electronAPI.fs.moveFiles(moves);
+            const responseMsg = result.success
+                ? `Moved ${result.successCount}/${moves.length} file(s) successfully.`
+                : `Error moving files: ${result.results.filter(r => !r.success).map(r => r.error).join(', ')}`;
+            if (onRefreshFolder) onRefreshFolder();
+            await window.electronAPI.addMessage(sessionId, "assistant", responseMsg);
+            setMessages(prev => [...prev, { role: "assistant", content: responseMsg }]);
+        } catch (e) {
+            const errorMsg = "Error: Failed to move files";
+            await window.electronAPI.addMessage(sessionId, "assistant", errorMsg);
+            setMessages(prev => [...prev, { role: "assistant", content: errorMsg }]);
+        }
+        setLoading(false);
+    }, [movePlan, sessionId, onRefreshFolder]);
+
+    const handleMoveCancel = useCallback(() => setMovePlan(null), []);
+
+    const handleRenameConfirm = useCallback(async () => {
+        if (!renamePlan || !sessionId) return;
+        const { oldPath, newPath } = renamePlan;
+        setRenamePlan(null);
+        setLoading(true);
+        try {
+            const result = await window.electronAPI.fs.moveFiles([{ from: oldPath, to: newPath }]);
+            const responseMsg = result.success
+                ? `Renamed successfully: ${renamePlan.oldName} → ${renamePlan.newName}`
+                : `Error renaming: ${result.results[0]?.error || 'Unknown error'}`;
+            if (onRefreshFolder) onRefreshFolder();
+            await window.electronAPI.addMessage(sessionId, "assistant", responseMsg);
+            setMessages(prev => [...prev, { role: "assistant", content: responseMsg }]);
+        } catch (e) {
+            const errorMsg = "Error: Failed to rename file";
+            await window.electronAPI.addMessage(sessionId, "assistant", errorMsg);
+            setMessages(prev => [...prev, { role: "assistant", content: errorMsg }]);
+        }
+        setLoading(false);
+    }, [renamePlan, sessionId, onRefreshFolder]);
+
+    const handleRenameCancel = useCallback(() => setRenamePlan(null), []);
+
+    const handleDeleteConfirm = useCallback(async () => {
+        if (!deletePlan || !sessionId) return;
+        const { files } = deletePlan;
+        setDeletePlan(null);
+        setLoading(true);
+        try {
+            const result = await window.electronAPI.fs.deleteFiles(files.map(f => f.path));
+            const responseMsg = result.success
+                ? `Deleted ${result.successCount}/${files.length} item(s) successfully.`
+                : `Error deleting: ${result.results.filter(r => !r.success).map(r => r.error).join(', ')}`;
+            if (onRefreshFolder) onRefreshFolder();
+            await window.electronAPI.addMessage(sessionId, "assistant", responseMsg);
+            setMessages(prev => [...prev, { role: "assistant", content: responseMsg }]);
+        } catch (e) {
+            const errorMsg = "Error: Failed to delete files";
+            await window.electronAPI.addMessage(sessionId, "assistant", errorMsg);
+            setMessages(prev => [...prev, { role: "assistant", content: errorMsg }]);
+        }
+        setLoading(false);
+    }, [deletePlan, sessionId, onRefreshFolder]);
+
+    const handleDeleteCancel = useCallback(() => setDeletePlan(null), []);
 
     const formatSessionDate = (dateStr: string) => {
         const date = new Date(dateStr);
@@ -845,6 +984,97 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
                 </div>
             )}
 
+
+            {/* Move Confirmation Modal */}
+            {movePlan && (
+                <div className="p-4 border-t border-white/10 bg-blue-500/10">
+                    <div className="bg-white/5 rounded-xl p-4 border border-blue-500/30">
+                        <div className="flex items-center gap-2 mb-3">
+                            <svg className="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+                            </svg>
+                            <span className="font-medium text-blue-100">Confirm Move</span>
+                        </div>
+                        <div className="space-y-2 mb-4 max-h-40 overflow-y-auto">
+                            {movePlan.moves.map((move, idx) => (
+                                <div key={idx} className="bg-white/5 rounded-lg p-2 text-sm">
+                                    <div className="text-blue-200 truncate">{move.fileName}</div>
+                                    <div className="text-blue-400/60 text-xs truncate">→ {move.to}</div>
+                                </div>
+                            ))}
+                        </div>
+                        <div className="flex gap-2">
+                            <button onClick={handleMoveCancel} className="flex-1 px-4 py-2 rounded-lg bg-white/10 hover:bg-white/20 text-blue-200 text-sm font-medium transition-colors">Cancel</button>
+                            <button onClick={handleMoveConfirm} disabled={loading} className="flex-1 px-4 py-2 rounded-lg bg-blue-500 hover:bg-blue-600 text-white text-sm font-medium transition-colors disabled:opacity-50">
+                                {loading ? "Moving..." : "Confirm Move"}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Rename Confirmation Modal */}
+            {renamePlan && (
+                <div className="p-4 border-t border-white/10 bg-amber-500/10">
+                    <div className="bg-white/5 rounded-xl p-4 border border-amber-500/30">
+                        <div className="flex items-center gap-2 mb-3">
+                            <svg className="w-5 h-5 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                            </svg>
+                            <span className="font-medium text-amber-100">Confirm Rename</span>
+                        </div>
+                        <div className="bg-white/5 rounded-lg p-3 mb-4 text-sm">
+                            <div className="text-amber-300/70 text-xs mb-1">From</div>
+                            <div className="text-amber-200 truncate">{renamePlan.oldName}</div>
+                            <div className="text-amber-300/70 text-xs mt-2 mb-1">To</div>
+                            <div className="text-amber-200 truncate">{renamePlan.newName}</div>
+                        </div>
+                        <div className="flex gap-2">
+                            <button onClick={handleRenameCancel} className="flex-1 px-4 py-2 rounded-lg bg-white/10 hover:bg-white/20 text-amber-200 text-sm font-medium transition-colors">Cancel</button>
+                            <button onClick={handleRenameConfirm} disabled={loading} className="flex-1 px-4 py-2 rounded-lg bg-amber-500 hover:bg-amber-600 text-white text-sm font-medium transition-colors disabled:opacity-50">
+                                {loading ? "Renaming..." : "Confirm Rename"}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Delete Confirmation Modal */}
+            {deletePlan && (
+                <div className="p-4 border-t border-white/10 bg-red-500/10">
+                    <div className="bg-white/5 rounded-xl p-4 border border-red-500/30">
+                        <div className="flex items-center gap-2 mb-3">
+                            <svg className="w-5 h-5 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                            </svg>
+                            <span className="font-medium text-red-100">Confirm Delete</span>
+                            <span className="text-xs text-red-400/70 ml-auto">This cannot be undone</span>
+                        </div>
+                        <div className="space-y-2 mb-4 max-h-40 overflow-y-auto">
+                            {deletePlan.files.map((file, idx) => (
+                                <div key={idx} className="bg-white/5 rounded-lg p-2 flex items-center gap-2">
+                                    <svg className="w-4 h-4 text-red-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        {file.isDirectory
+                                            ? <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                                            : <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                                        }
+                                    </svg>
+                                    <span className="text-sm text-red-200 truncate flex-1">{file.name}</span>
+                                    {file.size !== undefined && (
+                                        <span className="text-xs text-red-400/60 flex-shrink-0">{Math.round(file.size / 1024)} KB</span>
+                                    )}
+                                </div>
+                            ))}
+                        </div>
+                        <div className="flex gap-2">
+                            <button onClick={handleDeleteCancel} className="flex-1 px-4 py-2 rounded-lg bg-white/10 hover:bg-white/20 text-red-200 text-sm font-medium transition-colors">Cancel</button>
+                            <button onClick={handleDeleteConfirm} disabled={loading} className="flex-1 px-4 py-2 rounded-lg bg-red-500 hover:bg-red-600 text-white text-sm font-medium transition-colors disabled:opacity-50">
+                                {loading ? "Deleting..." : "Delete Permanently"}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* Selected Text Section - positioned above input */}
             {mode === "viewer" && selectedText && (
