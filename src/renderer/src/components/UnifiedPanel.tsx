@@ -1,6 +1,14 @@
 import React, { useState, useEffect, useCallback, useMemo, memo, useRef } from "react";
 import ReactMarkdown from "react-markdown";
 import ChatInput from "./ChatInput";
+import DocumentRecommendations from "./DocumentRecommendations";
+
+interface DocumentSuggestion {
+    id: string;
+    file_name: string;
+    file_path: string;
+    snippet: string;
+}
 
 interface FileEntry {
     name: string;
@@ -26,6 +34,7 @@ interface UnifiedPanelProps {
     onSessionChange?: (sessionId: number) => void;
     onDeleteSession?: (sessionId: number) => void;
     onRefreshFolder?: () => void;
+    onOpenDocument?: (filePath: string, fileName: string) => void;
 }
 
 interface Message {
@@ -40,7 +49,7 @@ interface Session {
     updated_at: string;
 }
 
-export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mode, sessionId, onBack, selectedText, onClearSelection, isEmbedding, embeddingProgress, onNewSession, onSessionChange, onDeleteSession, onRefreshFolder }: UnifiedPanelProps) {
+export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mode, sessionId, onBack, selectedText, onClearSelection, isEmbedding, embeddingProgress, onNewSession, onSessionChange, onDeleteSession, onRefreshFolder, onOpenDocument }: UnifiedPanelProps) {
     const [messages, setMessages] = useState<Message[]>([]);
     const [loading, setLoading] = useState(false);
 
@@ -90,6 +99,11 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
     const [deletePlan, setDeletePlan] = useState<{
         files: { path: string; name: string; isDirectory: boolean; size?: number }[];
     }[]>([]);
+
+    // Document recommendations state
+    const [docRecommendations, setDocRecommendations] = useState<DocumentSuggestion[]>([]);
+    const sessionIdRef = useRef(sessionId);
+    useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
 
     // Session management state
     const [sessions, setSessions] = useState<Session[]>([]);
@@ -238,6 +252,26 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
                         }
                     } catch (e) {}
                 }
+
+                // Check for document_recommendations
+                if (toolCall.name === 'recommend_documents' && toolCall.output) {
+                    try {
+                        let outputContent: string;
+                        if (typeof toolCall.output === 'string') outputContent = toolCall.output;
+                        else if (toolCall.output.lc_kwargs?.content) outputContent = toolCall.output.lc_kwargs.content;
+                        else if (toolCall.output.content) outputContent = toolCall.output.content;
+                        else outputContent = JSON.stringify(toolCall.output);
+                        console.log('[recommend_documents] raw output:', outputContent.substring(0, 300));
+                        const output = JSON.parse(outputContent);
+                        console.log('[recommend_documents] parsed docs count:', output.documents?.length);
+                        if (output.type === 'document_recommendations' && output.documents && output.documents.length > 0) {
+                            setDocRecommendations(output.documents);
+                            if (sessionIdRef.current) {
+                                localStorage.setItem(`doc_recs_${sessionIdRef.current}`, JSON.stringify(output.documents));
+                            }
+                        }
+                    } catch (e) {}
+                }
             }
         });
 
@@ -274,6 +308,13 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
             } else {
                 setMessages(sanitizedMsgs);
             }
+        }
+        if (!append) {
+            try {
+                const saved = localStorage.getItem(`doc_recs_${sessionId}`);
+                if (saved) setDocRecommendations(JSON.parse(saved));
+                else setDocRecommendations([]);
+            } catch (e) {}
         }
         return msgs.length;
     }, [sessionId]);
@@ -317,6 +358,8 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
             : `${prefix}${userInput}`;
 
         if (onClearSelection) onClearSelection();
+        setDocRecommendations([]);
+        if (sessionId) localStorage.removeItem(`doc_recs_${sessionId}`);
         setLoading(true);
 
         if (sessionId) {
@@ -794,6 +837,14 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
                         </div>
                     </div>
                 ))}
+
+                {/* Document Recommendations */}
+                {docRecommendations.length > 0 && (
+                    <DocumentRecommendations
+                        documents={docRecommendations}
+                        onOpenDocument={onOpenDocument ?? (() => {})}
+                    />
+                )}
 
                 {/* Streaming view */}
                 {(streamingContent || activeTool || completedTools.length > 0) && (

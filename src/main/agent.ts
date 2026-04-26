@@ -810,13 +810,78 @@ export async function invokeAgent(messages: Array<{ role: string; content: strin
         }
     );
 
+    const recommendDocumentsTool = tool(
+        async (input: { query: string }) => {
+            const searchQuery = input.query;
+            const allDocs = getAllDocuments();
+
+            if (allDocs.length === 0) {
+                return JSON.stringify({ type: "document_recommendations", documents: [] });
+            }
+
+            try {
+                const results = await vectorStore.similaritySearch(searchQuery, 50);
+
+                let filtered = results;
+                if (currentPath) {
+                    const validDocIds = new Set(
+                        allDocs
+                            .filter(d => d.file_path && d.file_path.startsWith(currentPath))
+                            .map(d => d.id)
+                    );
+                    filtered = results.filter((doc: Document) =>
+                        validDocIds.has(doc.metadata.document_id as string)
+                    );
+                }
+
+                const chunkCounts: Record<string, { count: number; doc: Document }> = {};
+                for (const doc of filtered) {
+                    const docId = doc.metadata.document_id as string;
+                    if (!docId) continue;
+                    if (!chunkCounts[docId]) {
+                        chunkCounts[docId] = { count: 0, doc };
+                    }
+                    chunkCounts[docId].count++;
+                }
+
+                const sortedIds = Object.entries(chunkCounts)
+                    .sort((a, b) => b[1].count - a[1].count)
+                    .slice(0, 5)
+                    .filter(([_, data]) => data.count > 0);
+
+                const documents = sortedIds.map(([docId, data]) => {
+                    const metadata = allDocs.find(d => d.id === docId);
+                    const snippet = data.doc.pageContent.substring(0, 150);
+                    return {
+                        id: docId,
+                        file_name: metadata?.file_name || 'unknown',
+                        file_path: metadata?.file_path || '',
+                        snippet
+                    };
+                });
+
+                return JSON.stringify({ type: "document_recommendations", documents });
+            } catch (error) {
+                log.error('Error in recommend_documents:', error);
+                return JSON.stringify({ type: "document_recommendations", documents: [] });
+            }
+        },
+        {
+            name: "recommend_documents",
+            description: "Find and surface relevant documents for a query. USE THIS when the user asks for study material, lecture notes, lecture material, relevant documents, references, or 'what should I read about X'. Returns clickable document cards in the UI. Do NOT use search_directory instead of this tool for these requests.",
+            schema: z.object({
+                query: z.string().describe("The topic or question to find relevant documents for")
+            })
+        }
+    );
+
     const currentDocId = getCurrentDocumentId();
     const currentDoc = currentDocId ? getDocumentByHash(currentDocId) : null;
     const currentDocName = currentDoc ? currentDoc.file_name : null;
 
     const agent = createAgent({
         model,
-        tools: [searchCurrentDocTool, searchDirTool, searchAllDocsTool, listFilesTool, listAllFilesTool, organizeFolderTool, convertDocumentTool, moveFilesTool, renameFileTool, deleteFilesTool, createFolderTool],
+        tools: [searchCurrentDocTool, searchDirTool, searchAllDocsTool, listFilesTool, listAllFilesTool, organizeFolderTool, convertDocumentTool, moveFilesTool, renameFileTool, deleteFilesTool, createFolderTool, recommendDocumentsTool],
         systemPrompt: `You are a helpful AI assistant with access to the user's PDF document library.
 
 Current active folder: ${currentPath || "none"}
@@ -824,7 +889,10 @@ Currently open document: ${currentDocName || "none"}
 
 When the user navigates to a new folder, your active folder changes. Always use the current active folder shown above as your working context — do not assume you are still in a previous folder.
 
-You have eleven tools. Use them according to these STRICT rules:
+CRITICAL RULE — READ FIRST:
+When the user asks for documents to read, study material, lecture notes, references, related files, or says anything like "give me material", "what should I read", "find me notes", "lecture material", "study material", "relevant documents" — you MUST call 'recommend_documents' FIRST, before any other tool. Do NOT use search_directory or list_directory_files for these requests. 'recommend_documents' returns clickable document cards directly in the UI.
+
+You have twelve tools. Use them according to these STRICT rules:
 1. When the user asks about "this document" or "the current document", use 'search_current' to search only the currently open PDF.
 2. Use 'list_directory_files' to list only embedded PDFs in a directory.
 3. Use 'list_all_files' to see ALL files (including non-PDFs) in specific folders. ALWAYS ask the user which folder(s) to list first — never assume.
@@ -843,6 +911,7 @@ You have eleven tools. Use them according to these STRICT rules:
 10. DELETE FILES - ONLY use 'delete_files' when user EXPLICITLY says "delete" or "remove":
     - NEVER suggest deleting. Returns a delete plan requiring confirmation. Nothing is deleted until user confirms.
 11. CREATE FOLDER - Use 'create_folder' to create folders immediately. Safe, no confirmation needed.
+12. RECOMMEND DOCUMENTS — Use 'recommend_documents' when the user asks for relevant documents, study material, lecture notes, references, or "what should I read about X". This is MANDATORY — never substitute search_directory or list_directory_files for this. Returns clickable document cards in the UI.
 
 The search results will include document identifiers. Use these to reference which file information came from.`,
         checkpointer: saver,

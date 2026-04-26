@@ -342,6 +342,31 @@ function App() {
         }
     }, [sessionId, updateActiveTab]);
 
+    const handleOpenInNewTab = useCallback((filePath: string, fileName: string) => {
+        if (tabs.length >= 10) return;
+        const tab = makeTab(filePath.substring(0, filePath.lastIndexOf("/")) || defaultDir);
+        const file: FileEntry = { name: fileName, path: filePath, isDirectory: false, size: 0, modified: "" };
+        const newTab: TabState = { ...tab, selectedFile: file, viewMode: "viewer", fileName };
+        setTabs((prev) => [...prev, newTab]);
+        setActiveTabId(newTab.id);
+        if (fileName.endsWith(".pdf")) {
+            window.electronAPI.readFile(filePath).then((buffer) => {
+                if (buffer) {
+                    const uint8 = new Uint8Array(buffer);
+                    setTabs((prev) => prev.map((t) => t.id === newTab.id ? { ...t, pdfPath: filePath, pdfData: uint8, isEmbedding: true, embeddingProgress: 30 } : t));
+                    if (sessionId) {
+                        window.electronAPI.loadPdfText(uint8.slice(), filePath, sessionId)
+                            .then(() => { setTabs((prev) => prev.map((t) => t.id === newTab.id ? { ...t, embeddingProgress: 100 } : t)); setTimeout(() => setTabs((prev) => prev.map((t) => t.id === newTab.id ? { ...t, isEmbedding: false } : t)), 500); })
+                            .catch(() => { setTabs((prev) => prev.map((t) => t.id === newTab.id ? { ...t, embeddingProgress: 100 } : t)); setTimeout(() => setTabs((prev) => prev.map((t) => t.id === newTab.id ? { ...t, isEmbedding: false } : t)), 500); });
+                    } else {
+                        setTabs((prev) => prev.map((t) => t.id === newTab.id ? { ...t, embeddingProgress: 100 } : t));
+                        setTimeout(() => setTabs((prev) => prev.map((t) => t.id === newTab.id ? { ...t, isEmbedding: false } : t)), 500);
+                    }
+                }
+            }).catch(() => setTabs((prev) => prev.map((t) => t.id === newTab.id ? { ...t, isEmbedding: false } : t)));
+        }
+    }, [tabs.length, defaultDir, sessionId]);
+
     const handleTextSelect = useCallback((text: string) => setSelectedText(text), []);
     const handleClearSelection = useCallback(() => { setSelectedText(null); window.getSelection()?.removeAllRanges(); }, []);
     const handleNavigate = useCallback((pageNum: number) => updateActiveTab({ currentPage: pageNum }), [updateActiveTab]);
@@ -527,6 +552,7 @@ function App() {
                                 onSessionChange={handleSessionChange}
                                 onDeleteSession={handleDeleteSession}
                                 onRefreshFolder={() => setFolderRefreshKey((k) => k + 1)}
+                                onOpenDocument={handleOpenInNewTab}
                             />
                         </div>
                     </>
@@ -609,6 +635,7 @@ function App() {
                                 onBack={() => updateActiveTab({ viewMode: "explorer", selectedFile: null })}
                                 isEmbedding={activeTab.isEmbedding || (batchEmbedding && batchProgress?.fileName === activeTab.fileName)}
                                 embeddingProgress={activeTab.isEmbedding ? activeTab.embeddingProgress : (batchProgress?.fileProgress || 0)}
+                                onOpenDocument={handleOpenInNewTab}
                             />
                         </div>
                     </>
