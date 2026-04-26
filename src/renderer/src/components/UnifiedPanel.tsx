@@ -64,19 +64,19 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
         groups: { folder: string; files: string[]; filePaths?: string[] }[];
         subfoldersScanned?: string[];
         totalFiles?: number;
-    } | null>(null);
+    }[]>([]);
 
     // Convert confirmation state
     const [convertPlan, setConvertPlan] = useState<{
         files: { filePath: string; outputPath: string; fileName: string; fileSize: number }[];
         totalFiles: number;
         totalSize: number;
-    } | null>(null);
+    }[]>([]);
 
     // Move confirmation state
     const [movePlan, setMovePlan] = useState<{
         moves: { from: string; to: string; fileName: string }[];
-    } | null>(null);
+    }[]>([]);
 
     // Rename confirmation state
     const [renamePlan, setRenamePlan] = useState<{
@@ -84,12 +84,12 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
         newPath: string;
         oldName: string;
         newName: string;
-    } | null>(null);
+    }[]>([]);
 
     // Delete confirmation state
     const [deletePlan, setDeletePlan] = useState<{
         files: { path: string; name: string; isDirectory: boolean; size?: number }[];
-    } | null>(null);
+    }[]>([]);
 
     // Session management state
     const [sessions, setSessions] = useState<Session[]>([]);
@@ -153,14 +153,14 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
                         
                         const output = JSON.parse(outputContent);
                         if (output.type === 'organize_plan') {
-                            setOrganizePlan({
+                            setOrganizePlan(prev => [...prev, {
                                 targetPath: output.targetPath,
                                 strategy: output.strategy || 'type',
                                 flatten: output.flatten || false,
                                 groups: output.groups,
                                 subfoldersScanned: output.subfoldersScanned,
                                 totalFiles: output.totalFiles
-                            });
+                            }]);
                         }
                     } catch (e) {
                         // Not JSON, ignore
@@ -183,11 +183,11 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
 
                         const output = JSON.parse(outputContent);
                         if (output.type === 'convert_plan' && output.files && output.files.length > 0) {
-                            setConvertPlan({
+                            setConvertPlan(prev => [...prev, {
                                 files: output.files,
                                 totalFiles: output.totalFiles,
                                 totalSize: output.totalSize
-                            });
+                            }]);
                         }
                     } catch (e) {
                         // Not JSON, ignore
@@ -204,7 +204,7 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
                         else outputContent = JSON.stringify(toolCall.output);
                         const output = JSON.parse(outputContent);
                         if (output.type === 'move_plan' && output.moves && output.moves.length > 0) {
-                            setMovePlan({ moves: output.moves });
+                            setMovePlan(prev => [...prev, { moves: output.moves }]);
                         }
                     } catch (e) {}
                 }
@@ -219,7 +219,7 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
                         else outputContent = JSON.stringify(toolCall.output);
                         const output = JSON.parse(outputContent);
                         if (output.type === 'rename_plan' && output.oldPath && !output.error) {
-                            setRenamePlan({ oldPath: output.oldPath, newPath: output.newPath, oldName: output.oldName, newName: output.newName });
+                            setRenamePlan(prev => [...prev, { oldPath: output.oldPath, newPath: output.newPath, oldName: output.oldName, newName: output.newName }]);
                         }
                     } catch (e) {}
                 }
@@ -234,7 +234,7 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
                         else outputContent = JSON.stringify(toolCall.output);
                         const output = JSON.parse(outputContent);
                         if (output.type === 'delete_plan' && output.files && output.files.length > 0) {
-                            setDeletePlan({ files: output.files });
+                            setDeletePlan(prev => [...prev, { files: output.files }]);
                         }
                     } catch (e) {}
                 }
@@ -374,28 +374,29 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
     }, [loading, mode, sessionId, selectedText, onClearSelection, currentPath, messages.length]);
 
     const handleOrganizeConfirm = useCallback(async () => {
-        if (!organizePlan || !sessionId) return;
-        
-        const { targetPath, strategy, flatten } = organizePlan;
-        setOrganizePlan(null);
+        if (organizePlan.length === 0 || !sessionId) return;
+
+        const plan = organizePlan[0];
+        const { targetPath, strategy, flatten } = plan;
+        setOrganizePlan(prev => prev.slice(1));
         setLoading(true);
-        
+
         // Directly call the IPC handler to organize
         try {
-            const hasCustomGroups = organizePlan.groups.some(g => g.filePaths && g.filePaths.length > 0);
+            const hasCustomGroups = plan.groups.some(g => g.filePaths && g.filePaths.length > 0);
             const result = await window.electronAPI.fs.organizeFolder({
                 action: "organize",
                 targetPath,
                 strategy: strategy || 'type',
                 flatten: flatten || false,
                 ...(hasCustomGroups ? {
-                    customGroups: organizePlan.groups.map(g => ({
+                    customGroups: plan.groups.map(g => ({
                         folder: g.folder,
                         filePaths: g.filePaths || []
                     }))
                 } : {})
             });
-            
+
             let responseMsg = "";
             if (result.cancelled) {
                 responseMsg = "Operation was cancelled.";
@@ -408,7 +409,7 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
             } else {
                 responseMsg = `Error organizing folder: ${result.error}`;
             }
-            
+
             await window.electronAPI.addMessage(sessionId, "assistant", responseMsg);
             setMessages(prev => [...prev, { role: "assistant", content: responseMsg }]);
         } catch (e) {
@@ -416,28 +417,29 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
             await window.electronAPI.addMessage(sessionId, "assistant", errorMsg);
             setMessages(prev => [...prev, { role: "assistant", content: errorMsg }]);
         }
-        
+
         setLoading(false);
     }, [organizePlan, sessionId, loadMessages, currentPath, onRefreshFolder]);
 
     const handleOrganizeCancel = useCallback(() => {
-        setOrganizePlan(null);
+        setOrganizePlan(prev => prev.slice(1));
     }, []);
 
     const handleConvertConfirm = useCallback(async () => {
-        if (!convertPlan || !sessionId) return;
-        
-        const { files } = convertPlan;
-        setConvertPlan(null);
+        if (convertPlan.length === 0 || !sessionId) return;
+
+        const plan = convertPlan[0];
+        const { files } = plan;
+        setConvertPlan(prev => prev.slice(1));
         setLoading(true);
-        
+
         try {
             const filesToConvert = files.map(f => ({
                 inputPath: f.filePath,
                 outputPath: f.outputPath
             }));
             const result = await window.electronAPI.convertDocument.execute(filesToConvert);
-            
+
             let responseMsg = "";
             if (result.success) {
                 responseMsg = `Successfully converted ${result.successCount}/${result.totalFiles} files. Failed: ${result.failedCount}`;
@@ -454,7 +456,7 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
             } else {
                 responseMsg = `Error converting documents`;
             }
-            
+
             await window.electronAPI.addMessage(sessionId, "assistant", responseMsg);
             setMessages(prev => [...prev, { role: "assistant", content: responseMsg }]);
         } catch (e) {
@@ -462,18 +464,18 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
             await window.electronAPI.addMessage(sessionId, "assistant", errorMsg);
             setMessages(prev => [...prev, { role: "assistant", content: errorMsg }]);
         }
-        
+
         setLoading(false);
     }, [convertPlan, sessionId, loadMessages, currentPath, onRefreshFolder]);
 
     const handleConvertCancel = useCallback(() => {
-        setConvertPlan(null);
+        setConvertPlan(prev => prev.slice(1));
     }, []);
 
     const handleMoveConfirm = useCallback(async () => {
-        if (!movePlan || !sessionId) return;
-        const { moves } = movePlan;
-        setMovePlan(null);
+        if (movePlan.length === 0 || !sessionId) return;
+        const { moves } = movePlan[0];
+        setMovePlan(prev => prev.slice(1));
         setLoading(true);
         try {
             const result = await window.electronAPI.fs.moveFiles(moves);
@@ -491,17 +493,18 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
         setLoading(false);
     }, [movePlan, sessionId, onRefreshFolder]);
 
-    const handleMoveCancel = useCallback(() => setMovePlan(null), []);
+    const handleMoveCancel = useCallback(() => setMovePlan(prev => prev.slice(1)), []);
 
     const handleRenameConfirm = useCallback(async () => {
-        if (!renamePlan || !sessionId) return;
-        const { oldPath, newPath } = renamePlan;
-        setRenamePlan(null);
+        if (renamePlan.length === 0 || !sessionId) return;
+        const plan = renamePlan[0];
+        const { oldPath, newPath } = plan;
+        setRenamePlan(prev => prev.slice(1));
         setLoading(true);
         try {
             const result = await window.electronAPI.fs.moveFiles([{ from: oldPath, to: newPath }]);
             const responseMsg = result.success
-                ? `Renamed successfully: ${renamePlan.oldName} → ${renamePlan.newName}`
+                ? `Renamed successfully: ${plan.oldName} → ${plan.newName}`
                 : `Error renaming: ${result.results[0]?.error || 'Unknown error'}`;
             if (onRefreshFolder) onRefreshFolder();
             await window.electronAPI.addMessage(sessionId, "assistant", responseMsg);
@@ -514,12 +517,12 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
         setLoading(false);
     }, [renamePlan, sessionId, onRefreshFolder]);
 
-    const handleRenameCancel = useCallback(() => setRenamePlan(null), []);
+    const handleRenameCancel = useCallback(() => setRenamePlan(prev => prev.slice(1)), []);
 
     const handleDeleteConfirm = useCallback(async () => {
-        if (!deletePlan || !sessionId) return;
-        const { files } = deletePlan;
-        setDeletePlan(null);
+        if (deletePlan.length === 0 || !sessionId) return;
+        const { files } = deletePlan[0];
+        setDeletePlan(prev => prev.slice(1));
         setLoading(true);
         try {
             const result = await window.electronAPI.fs.deleteFiles(files.map(f => f.path));
@@ -537,7 +540,7 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
         setLoading(false);
     }, [deletePlan, sessionId, onRefreshFolder]);
 
-    const handleDeleteCancel = useCallback(() => setDeletePlan(null), []);
+    const handleDeleteCancel = useCallback(() => setDeletePlan(prev => prev.slice(1)), []);
 
     const formatSessionDate = (dateStr: string) => {
         const date = new Date(dateStr);
@@ -871,7 +874,7 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
             </div>
 
             {/* Organize Confirmation Modal */}
-            {organizePlan && (
+            {organizePlan.length > 0 && (
                 <div className="p-4 border-t border-white/10 bg-purple-500/10">
                     <div className="bg-white/5 rounded-xl p-4 border border-purple-500/30">
                         <div className="flex items-center gap-2 mb-3">
@@ -879,23 +882,24 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
                             </svg>
                             <span className="font-medium text-purple-100">Confirm Folder Organization</span>
+                            {organizePlan.length > 1 && <span className="text-xs text-purple-400/70 ml-auto">{organizePlan.length} pending</span>}
                         </div>
-                        
+
                         <div className="text-sm text-purple-300 mb-3">
-                            <p className="mb-2">Organize <span className="text-purple-200">{organizePlan.targetPath}</span></p>
+                            <p className="mb-2">Organize <span className="text-purple-200">{organizePlan[0].targetPath}</span></p>
                             <p className="text-purple-400/70">
-                                {organizePlan.flatten 
-                                    ? "Flatten: Move all files to root, remove subfolders" 
-                                    : `Strategy: ${organizePlan.strategy} (include subfolders)`
+                                {organizePlan[0].flatten
+                                    ? "Flatten: Move all files to root, remove subfolders"
+                                    : `Strategy: ${organizePlan[0].strategy} (include subfolders)`
                                 }
                             </p>
-                            {organizePlan.totalFiles && (
-                                <p className="text-purple-400/70 text-xs mt-1">{organizePlan.totalFiles} files to process</p>
+                            {organizePlan[0].totalFiles && (
+                                <p className="text-purple-400/70 text-xs mt-1">{organizePlan[0].totalFiles} files to process</p>
                             )}
                         </div>
 
                         <div className="space-y-2 mb-4 max-h-40 overflow-y-auto">
-                            {organizePlan.groups.map((group, idx) => (
+                            {organizePlan[0].groups.map((group, idx) => (
                                 <div key={idx} className="bg-white/5 rounded-lg p-2">
                                     <div className="flex items-center gap-2 text-purple-200 text-sm font-medium mb-1">
                                         <svg className="w-4 h-4 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -932,7 +936,7 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
             )}
 
             {/* Convert Confirmation Modal */}
-            {convertPlan && (
+            {convertPlan.length > 0 && (
                 <div className="p-4 border-t border-white/10 bg-emerald-500/10">
                     <div className="bg-white/5 rounded-xl p-4 border border-emerald-500/30">
                         <div className="flex items-center gap-2 mb-3">
@@ -940,19 +944,20 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                             </svg>
                             <span className="font-medium text-emerald-100">Confirm PowerPoint to PDF Conversion</span>
+                            {convertPlan.length > 1 && <span className="text-xs text-emerald-400/70 ml-auto">{convertPlan.length} pending</span>}
                         </div>
-                        
+
                         <div className="text-sm text-emerald-300 mb-3">
-                            <p className="mb-2">Convert <span className="text-emerald-200">{convertPlan.totalFiles} file(s)</span></p>
-                            {convertPlan.totalSize && (
+                            <p className="mb-2">Convert <span className="text-emerald-200">{convertPlan[0].totalFiles} file(s)</span></p>
+                            {convertPlan[0].totalSize && (
                                 <p className="text-emerald-400/70 text-xs">
-                                    Total size: {Math.round(convertPlan.totalSize / 1024)} KB
+                                    Total size: {Math.round(convertPlan[0].totalSize / 1024)} KB
                                 </p>
                             )}
                         </div>
 
                         <div className="space-y-2 mb-4 max-h-40 overflow-y-auto">
-                            {convertPlan.files.map((file, idx) => (
+                            {convertPlan[0].files.map((file, idx) => (
                                 <div key={idx} className="bg-white/5 rounded-lg p-2">
                                     <div className="flex items-center gap-2 text-emerald-200 text-sm">
                                         <svg className="w-4 h-4 text-emerald-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -986,7 +991,7 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
 
 
             {/* Move Confirmation Modal */}
-            {movePlan && (
+            {movePlan.length > 0 && (
                 <div className="p-4 border-t border-white/10 bg-blue-500/10">
                     <div className="bg-white/5 rounded-xl p-4 border border-blue-500/30">
                         <div className="flex items-center gap-2 mb-3">
@@ -994,9 +999,10 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
                             </svg>
                             <span className="font-medium text-blue-100">Confirm Move</span>
+                            {movePlan.length > 1 && <span className="text-xs text-blue-400/70 ml-auto">{movePlan.length} pending</span>}
                         </div>
                         <div className="space-y-2 mb-4 max-h-40 overflow-y-auto">
-                            {movePlan.moves.map((move, idx) => (
+                            {movePlan[0].moves.map((move, idx) => (
                                 <div key={idx} className="bg-white/5 rounded-lg p-2 text-sm">
                                     <div className="text-blue-200 truncate">{move.fileName}</div>
                                     <div className="text-blue-400/60 text-xs truncate">→ {move.to}</div>
@@ -1014,7 +1020,7 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
             )}
 
             {/* Rename Confirmation Modal */}
-            {renamePlan && (
+            {renamePlan.length > 0 && (
                 <div className="p-4 border-t border-white/10 bg-amber-500/10">
                     <div className="bg-white/5 rounded-xl p-4 border border-amber-500/30">
                         <div className="flex items-center gap-2 mb-3">
@@ -1022,12 +1028,13 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
                             </svg>
                             <span className="font-medium text-amber-100">Confirm Rename</span>
+                            {renamePlan.length > 1 && <span className="text-xs text-amber-400/70 ml-auto">{renamePlan.length} pending</span>}
                         </div>
                         <div className="bg-white/5 rounded-lg p-3 mb-4 text-sm">
                             <div className="text-amber-300/70 text-xs mb-1">From</div>
-                            <div className="text-amber-200 truncate">{renamePlan.oldName}</div>
+                            <div className="text-amber-200 truncate">{renamePlan[0].oldName}</div>
                             <div className="text-amber-300/70 text-xs mt-2 mb-1">To</div>
-                            <div className="text-amber-200 truncate">{renamePlan.newName}</div>
+                            <div className="text-amber-200 truncate">{renamePlan[0].newName}</div>
                         </div>
                         <div className="flex gap-2">
                             <button onClick={handleRenameCancel} className="flex-1 px-4 py-2 rounded-lg bg-white/10 hover:bg-white/20 text-amber-200 text-sm font-medium transition-colors">Cancel</button>
@@ -1040,7 +1047,7 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
             )}
 
             {/* Delete Confirmation Modal */}
-            {deletePlan && (
+            {deletePlan.length > 0 && (
                 <div className="p-4 border-t border-white/10 bg-red-500/10">
                     <div className="bg-white/5 rounded-xl p-4 border border-red-500/30">
                         <div className="flex items-center gap-2 mb-3">
@@ -1048,10 +1055,10 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                             </svg>
                             <span className="font-medium text-red-100">Confirm Delete</span>
-                            <span className="text-xs text-red-400/70 ml-auto">This cannot be undone</span>
+                            <span className="text-xs text-red-400/70 ml-auto">{deletePlan.length > 1 ? `${deletePlan.length} pending · ` : ""}This cannot be undone</span>
                         </div>
                         <div className="space-y-2 mb-4 max-h-40 overflow-y-auto">
-                            {deletePlan.files.map((file, idx) => (
+                            {deletePlan[0].files.map((file, idx) => (
                                 <div key={idx} className="bg-white/5 rounded-lg p-2 flex items-center gap-2">
                                     <svg className="w-4 h-4 text-red-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                         {file.isDirectory

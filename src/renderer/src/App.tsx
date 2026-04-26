@@ -1,9 +1,8 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import PDFViewer from "./components/PDFViewer";
 import TOCPanel from "./components/TOCPanel";
 import SettingsModal from "./components/SettingsModal";
 import FileExplorer from "./components/FileExplorer";
-import FileViewer from "./components/FileViewer";
 import UnifiedPanel from "./components/UnifiedPanel";
 import React from "react";
 import * as pdfjsLib from "pdfjs-dist";
@@ -40,30 +39,61 @@ interface FileEntry {
     modified: string;
 }
 
+interface TabState {
+    id: string;
+    viewMode: "explorer" | "viewer";
+    currentPath: string;
+    selectedFile: FileEntry | null;
+    pdfPath: string | null;
+    pdfData: Uint8Array | null;
+    fileName: string | null;
+    currentPage: number;
+    pdf: pdfjsLib.PDFDocumentProxy | null;
+    isEmbedding: boolean;
+    embeddingProgress: number;
+}
+
+function makeTab(currentPath: string): TabState {
+    return {
+        id: Date.now().toString() + Math.random().toString(36).slice(2),
+        viewMode: "explorer",
+        currentPath,
+        selectedFile: null,
+        pdfPath: null,
+        pdfData: null,
+        fileName: null,
+        currentPage: 1,
+        pdf: null,
+        isEmbedding: false,
+        embeddingProgress: 0,
+    };
+}
+
+function getTabLabel(tab: TabState): string {
+    if (tab.viewMode === "viewer" && tab.fileName) return tab.fileName;
+    if (tab.currentPath) {
+        const parts = tab.currentPath.replace(/\\/g, "/").split("/").filter(Boolean);
+        return parts[parts.length - 1] || "Home";
+    }
+    return "New Tab";
+}
+
+const initialTab = makeTab("");
+
 function App() {
-    const [currentPath, setCurrentPath] = useState<string | null>(null);
+    const [defaultDir, setDefaultDir] = useState("");
+    const [tabs, setTabs] = useState<TabState[]>([initialTab]);
+    const [activeTabId, setActiveTabId] = useState<string>(initialTab.id);
     const [folderRefreshKey, setFolderRefreshKey] = useState(0);
-    const [selectedFile, setSelectedFile] = useState<FileEntry | null>(null);
-    const [pdfPath, setPdfPath] = useState<string | null>(null);
-    const [pdfData, setPdfData] = useState<Uint8Array | null>(null);
-    const [pdfText, setPdfText] = useState<string | null>(null);
-    const [pdf, setPdf] = useState<pdfjsLib.PDFDocumentProxy | null>(null);
-    const [fileName, setFileName] = useState<string | null>(null);
     const [sessionId, setSessionId] = useState<number | null>(null);
     const [selectedText, setSelectedText] = useState<string | null>(null);
     const [tocOpen, setTocOpen] = useState(false);
     const [chatOpen, setChatOpen] = useState(true);
     const [docsOpen, setDocsOpen] = useState(false);
-    const [viewMode, setViewMode] = useState<"explorer" | "viewer">("explorer");
-    const [currentPage, setCurrentPage] = useState(1);
     const [menuOpen, setMenuOpen] = useState(false);
     const [settingsOpen, setSettingsOpen] = useState(false);
     const [documents, setDocuments] = useState<DocumentInfo[]>([]);
     const [currentDocId, setCurrentDocId] = useState<string | null>(null);
-    const [isEmbedding, setIsEmbedding] = useState(false);
-    const [embeddingProgress, setEmbeddingProgress] = useState(0);
-
-    // Batch embedding state
     const [batchEmbedding, setBatchEmbedding] = useState(false);
     const [batchProgress, setBatchProgress] = useState<{
         fileName: string;
@@ -72,194 +102,207 @@ function App() {
         fileProgress: number;
     } | null>(null);
 
+    const activeTab = useMemo(
+        () => tabs.find((t) => t.id === activeTabId) ?? tabs[0],
+        [tabs, activeTabId]
+    );
+
+    const updateActiveTab = useCallback(
+        (partial: Partial<TabState>) => {
+            setTabs((prev) =>
+                prev.map((t) => (t.id === activeTabId ? { ...t, ...partial } : t))
+            );
+        },
+        [activeTabId]
+    );
+
+    const updateTab = useCallback(
+        (tabId: string, partial: Partial<TabState>) => {
+            setTabs((prev) =>
+                prev.map((t) => (t.id === tabId ? { ...t, ...partial } : t))
+            );
+        },
+        []
+    );
+
     useEffect(() => {
-        const initHomeDir = async () => {
-            const defaultDir = await window.electronAPI.fs.getDefaultDir();
-            console.log('Starting in directory:', defaultDir);
-            setCurrentPath(defaultDir);
-        };
-        initHomeDir();
+        window.electronAPI.fs.getDefaultDir().then((dir: string) => {
+            setDefaultDir(dir);
+            setTabs((prev) =>
+                prev.map((t) => (t.id === initialTab.id ? { ...t, currentPath: dir } : t))
+            );
+        });
     }, []);
 
     useEffect(() => {
-        const initSession = async () => {
+        const init = async () => {
             try {
                 const sessions = await window.electronAPI.getSessions();
                 if (sessions.length > 0) {
-                    const lastSession = sessions[0];
-                    setSessionId(lastSession.id);
+                    setSessionId(sessions[0].id);
                 } else {
-                    const newSessionId =
-                        await window.electronAPI.createSession("");
-                    setSessionId(newSessionId);
+                    const newId = await window.electronAPI.createSession("");
+                    setSessionId(newId);
                 }
-            } catch (error) {
-                console.error("Error initializing session:", error);
-                const newSessionId = await window.electronAPI.createSession("");
-                setSessionId(newSessionId);
+            } catch {
+                const newId = await window.electronAPI.createSession("");
+                setSessionId(newId);
             }
         };
-        initSession();
+        init();
     }, []);
 
     useEffect(() => {
-        // Setup embedding progress listener
-        const removeProgressListener = window.electronAPI.onEmbeddingProgress((progress: number) => {
-            setEmbeddingProgress(Math.min(99, Math.max(0, progress)));
+        const remove = window.electronAPI.onEmbeddingProgress((progress: number) => {
+            updateActiveTab({ embeddingProgress: Math.min(99, Math.max(0, progress)) });
         });
-
-        return () => removeProgressListener();
-    }, []);
+        return () => remove();
+    }, [updateActiveTab]);
 
     useEffect(() => {
         const unsubs = [
             window.electronAPI.onBatchEmbeddingFileStart((data) => {
-                setBatchProgress({
-                    fileName: data.fileName,
-                    fileIndex: data.fileIndex,
-                    totalFiles: data.totalFiles,
-                    fileProgress: 0
-                });
+                setBatchProgress({ fileName: data.fileName, fileIndex: data.fileIndex, totalFiles: data.totalFiles, fileProgress: 0 });
             }),
             window.electronAPI.onBatchEmbeddingFileProgress((data) => {
-                setBatchProgress(prev => prev ? {
-                    ...prev,
-                    fileProgress: data.progress,
-                    fileIndex: data.fileIndex,
-                    totalFiles: data.totalFiles,
-                    fileName: data.fileName
-                } : null);
+                setBatchProgress((prev) =>
+                    prev ? { ...prev, fileProgress: data.progress, fileIndex: data.fileIndex, totalFiles: data.totalFiles, fileName: data.fileName } : null
+                );
             }),
-            window.electronAPI.onBatchEmbeddingFileDone((data) => {
-                loadDocuments();
-            }),
-            window.electronAPI.onBatchEmbeddingDone((data) => {
+            window.electronAPI.onBatchEmbeddingFileDone(() => loadDocuments()),
+            window.electronAPI.onBatchEmbeddingDone(() => {
                 setBatchEmbedding(false);
                 setBatchProgress(null);
-            })
+            }),
         ];
-
-        return () => unsubs.forEach(unsub => unsub());
+        return () => unsubs.forEach((u) => u());
     }, []);
 
     const loadDocuments = async () => {
         try {
-            console.log('Loading documents list...');
             const docs = await window.electronAPI.documents.list();
-            console.log('Documents loaded:', docs.length);
             setDocuments(docs);
             const current = await window.electronAPI.documents.current();
-            console.log('Current document:', current);
             setCurrentDocId(current);
-        } catch (error) {
-            console.error('Failed to load documents list:', error);
+        } catch (e) {
+            console.error("Failed to load documents:", e);
         }
     };
 
-    // Load documents list on mount
-    useEffect(() => {
-        loadDocuments();
-    }, []); // Load once on mount
+    useEffect(() => { loadDocuments(); }, []);
 
     useEffect(() => {
-        const handleClickOutside = () => setMenuOpen(false);
+        const handler = () => setMenuOpen(false);
         if (menuOpen) {
-            document.addEventListener("click", handleClickOutside);
-            return () => document.removeEventListener("click", handleClickOutside);
+            document.addEventListener("click", handler);
+            return () => document.removeEventListener("click", handler);
         }
     }, [menuOpen]);
+
+    useEffect(() => {
+        if (activeTab.pdfData && sessionId && activeTab.pdfPath) {
+            window.electronAPI.loadPdfText(activeTab.pdfData.slice(), activeTab.pdfPath, sessionId).then((hash) => {
+                if (hash) console.log("PDF processed:", hash.substring(0, 8) + "...");
+            });
+        }
+    }, [activeTab.pdfData, activeTab.pdfPath, sessionId]);
+
+    const handleNewTab = useCallback(() => {
+        if (tabs.length >= 10) return;
+        const tab = makeTab(defaultDir);
+        setTabs((prev) => [...prev, tab]);
+        setActiveTabId(tab.id);
+    }, [tabs.length, defaultDir]);
+
+    const handleCloseTab = useCallback(
+        (tabId: string, e: React.MouseEvent) => {
+            e.stopPropagation();
+            if (tabs.length === 1) return;
+            const idx = tabs.findIndex((t) => t.id === tabId);
+            const newTabs = tabs.filter((t) => t.id !== tabId);
+            if (activeTabId === tabId) {
+                setActiveTabId(newTabs[Math.min(idx, newTabs.length - 1)].id);
+            }
+            setTabs(newTabs);
+        },
+        [tabs, activeTabId]
+    );
 
     const handleFileOpen = useCallback(async () => {
         const filePath = await window.electronAPI.openFileDialog();
         if (filePath) {
             const buffer = await window.electronAPI.readFile(filePath);
             if (buffer) {
-                setPdfPath(filePath);
-                setFileName(filePath.split(/[\\/]/).pop() || null);
-                setPdfData(new Uint8Array(buffer));
-                if (sessionId) {
-                    await window.electronAPI.updateSession(sessionId, filePath);
-                }
+                const name = filePath.split(/[\\/]/).pop() || null;
+                updateActiveTab({ pdfPath: filePath, fileName: name, pdfData: new Uint8Array(buffer) });
+                if (sessionId) await window.electronAPI.updateSession(sessionId, filePath);
             }
         }
-    }, [sessionId]);
+    }, [sessionId, updateActiveTab]);
 
     const handleFileDrop = useCallback(async (file: File) => {
         if (file.type === "application/pdf") {
-            const arrayBuffer = await file.arrayBuffer();
-            setPdfData(new Uint8Array(arrayBuffer));
-            setPdfPath(file.name); // Use filename as path for drag-drop
-            setFileName(file.name);
+            const buf = await file.arrayBuffer();
+            updateActiveTab({ pdfData: new Uint8Array(buf), pdfPath: file.name, fileName: file.name });
         }
-    }, []);
+    }, [updateActiveTab]);
 
     const handleSwitchDocument = useCallback(async (hash: string) => {
         try {
             const success = await window.electronAPI.documents.switch(hash);
             if (success) {
                 setCurrentDocId(hash);
-                const doc = documents.find(d => d.id === hash);
-                if (doc && doc.file_path) {
+                const doc = documents.find((d) => d.id === hash);
+                if (doc?.file_path) {
                     const buffer = await window.electronAPI.readFile(doc.file_path);
                     if (buffer) {
-                        setPdfData(new Uint8Array(buffer));
-                        setPdfPath(doc.file_path);
-                        setFileName(doc.file_name);
+                        updateActiveTab({ pdfData: new Uint8Array(buffer), pdfPath: doc.file_path, fileName: doc.file_name });
                     }
                 }
             }
-        } catch (error) {
-            console.error('Error switching document:', error);
+        } catch (e) {
+            console.error("Error switching document:", e);
         }
-    }, [documents]);
+    }, [documents, updateActiveTab]);
 
     const handleDeleteDocument = useCallback(async (e: React.MouseEvent, hash: string) => {
         e.stopPropagation();
         try {
             const success = await window.electronAPI.documents.delete(hash);
             if (success) {
-                setDocuments(prev => prev.filter(d => d.id !== hash));
+                setDocuments((prev) => prev.filter((d) => d.id !== hash));
                 if (currentDocId === hash) {
                     setCurrentDocId(null);
-                    setPdfData(null);
-                    setPdfPath('');
-                    setFileName('');
+                    updateActiveTab({ pdfData: null, pdfPath: null, fileName: null });
                 }
             }
-        } catch (error) {
-            console.error('Error deleting document:', error);
+        } catch (e) {
+            console.error("Error deleting document:", e);
         }
-    }, [currentDocId]);
-
-    const handleFileExplorerNavigate = useCallback((path: string) => {
-        setCurrentPath(path);
-    }, []);
+    }, [currentDocId, updateActiveTab]);
 
     const handleEmbedAll = useCallback(async () => {
-        if (!currentPath || batchEmbedding) return;
+        if (!activeTab.currentPath || batchEmbedding) return;
         setBatchEmbedding(true);
         try {
-            await window.electronAPI.embedDirectoryPdfs(currentPath);
-        } catch (error) {
-            console.error("Failed to start batch embedding:", error);
+            await window.electronAPI.embedDirectoryPdfs(activeTab.currentPath);
+        } catch (e) {
+            console.error("Failed to start batch embedding:", e);
             setBatchEmbedding(false);
             setBatchProgress(null);
         }
-    }, [currentPath, batchEmbedding]);
+    }, [activeTab.currentPath, batchEmbedding]);
 
     const handleNewSession = useCallback(async () => {
         try {
             const newId = await window.electronAPI.createSession("");
-            if (newId) {
-                setSessionId(newId as number);
-                setSelectedText(null);
-            }
+            if (newId) { setSessionId(newId as number); setSelectedText(null); }
         } catch (e) {
-            console.error('Failed to create new session', e);
+            console.error("Failed to create session:", e);
         }
     }, []);
 
-    const handleSessionChange = useCallback(async (newSessionId: number) => {
+    const handleSessionChange = useCallback((newSessionId: number) => {
         setSessionId(newSessionId);
     }, []);
 
@@ -267,92 +310,44 @@ function App() {
         try {
             await window.electronAPI.deleteSession(targetSessionId);
             if (sessionId === targetSessionId) {
-                // Create a new session if we deleted the current one
                 const newId = await window.electronAPI.createSession("");
-                if (newId) {
-                    setSessionId(newId as number);
-                }
+                if (newId) setSessionId(newId as number);
             }
         } catch (e) {
-            console.error('Failed to delete session', e);
+            console.error("Failed to delete session:", e);
         }
     }, [sessionId]);
 
     const handleFileClick = useCallback((file: FileEntry) => {
-        if (!file.isDirectory) {
-            setSelectedFile(file);
-            setViewMode("viewer");
-            if (file.name.endsWith('.pdf')) {
-                setIsEmbedding(true);
-                setEmbeddingProgress(10);
-                window.electronAPI.readFile(file.path).then(buffer => {
-                    if (buffer) {
-                        setPdfPath(file.path);
-                        setFileName(file.name);
-                        setPdfData(new Uint8Array(buffer));
-                        setEmbeddingProgress(30);
-                        // Load PDF text for embedding
-                        if (sessionId) {
-                            window.electronAPI.loadPdfText(new Uint8Array(buffer), file.path, sessionId).then((hash) => {
-                                if (hash) {
-                                    setEmbeddingProgress(100);
-                                    setTimeout(() => setIsEmbedding(false), 500);
-                                } else {
-                                    setEmbeddingProgress(100);
-                                    setTimeout(() => setIsEmbedding(false), 500);
-                                }
-                            }).catch(() => {
-                                setEmbeddingProgress(100);
-                                setTimeout(() => setIsEmbedding(false), 500);
-                            });
-                        } else {
-                            setEmbeddingProgress(100);
-                            setTimeout(() => setIsEmbedding(false), 500);
-                        }
+        if (file.isDirectory) return;
+        updateActiveTab({ selectedFile: file, viewMode: "viewer" });
+        if (file.name.endsWith(".pdf")) {
+            updateActiveTab({ isEmbedding: true, embeddingProgress: 10 });
+            window.electronAPI.readFile(file.path).then((buffer) => {
+                if (buffer) {
+                    const uint8 = new Uint8Array(buffer);
+                    updateActiveTab({ pdfPath: file.path, fileName: file.name, pdfData: uint8, embeddingProgress: 30 });
+                    if (sessionId) {
+                        window.electronAPI.loadPdfText(uint8.slice(), file.path, sessionId)
+                            .then(() => { updateActiveTab({ embeddingProgress: 100 }); setTimeout(() => updateActiveTab({ isEmbedding: false }), 500); })
+                            .catch(() => { updateActiveTab({ embeddingProgress: 100 }); setTimeout(() => updateActiveTab({ isEmbedding: false }), 500); });
                     } else {
-                        setIsEmbedding(false);
+                        updateActiveTab({ embeddingProgress: 100 });
+                        setTimeout(() => updateActiveTab({ isEmbedding: false }), 500);
                     }
-                }).catch(() => {
-                    setIsEmbedding(false);
-                });
-            }
-        }
-    }, [sessionId]);
-
-    const handleCloseFileViewer = useCallback(() => {
-        setSelectedFile(null);
-    }, []);
-
-    const handleTextSelect = useCallback((text: string) => {
-        setSelectedText(text);
-    }, []);
-
-    const handleClearSelection = useCallback(() => {
-        setSelectedText(null);
-        window.getSelection()?.removeAllRanges();
-    }, []);
-
-    const handleNavigate = useCallback((pageNum: number) => {
-        setCurrentPage(pageNum);
-    }, []);
-
-    const handlePageChange = useCallback((page: number) => {
-        setCurrentPage(page);
-    }, []);
-
-    const handlePdfLoad = useCallback((pdfDoc: pdfjsLib.PDFDocumentProxy) => {
-        setPdf(pdfDoc);
-    }, []);
-
-    useEffect(() => {
-        if (pdfData && sessionId && pdfPath) {
-            window.electronAPI.loadPdfText(pdfData, pdfPath, sessionId).then((hash) => {
-                if (hash) {
-                    console.log('PDF processed, document hash:', hash.substring(0, 8) + '...');
+                } else {
+                    updateActiveTab({ isEmbedding: false });
                 }
-            });
+            }).catch(() => updateActiveTab({ isEmbedding: false }));
         }
-    }, [pdfData, sessionId, pdfPath]);
+    }, [sessionId, updateActiveTab]);
+
+    const handleTextSelect = useCallback((text: string) => setSelectedText(text), []);
+    const handleClearSelection = useCallback(() => { setSelectedText(null); window.getSelection()?.removeAllRanges(); }, []);
+    const handleNavigate = useCallback((pageNum: number) => updateActiveTab({ currentPage: pageNum }), [updateActiveTab]);
+    const handlePageChange = useCallback((page: number) => updateActiveTab({ currentPage: page }), [updateActiveTab]);
+    const handlePdfLoad = useCallback((pdfDoc: pdfjsLib.PDFDocumentProxy) => updateActiveTab({ pdf: pdfDoc }), [updateActiveTab]);
+    const handleFileExplorerNavigate = useCallback((path: string) => updateActiveTab({ currentPath: path }), [updateActiveTab]);
 
     const menuItems = [
         {
@@ -362,17 +357,7 @@ function App() {
                     <path d="M10 5a1 1 0 011 1v3h3a1 1 0 110 2h-3v3a1 1 0 11-2 0v-3H6a1 1 0 110-2h3V6a1 1 0 011-1z" />
                 </svg>
             ),
-            action: async () => {
-                try {
-                    const newId = await window.electronAPI.createSession("");
-                    if (newId) {
-                        setSessionId(newId as number);
-                        setSelectedText(null);
-                    }
-                } catch (e) {
-                    console.error('Failed to create new session', e);
-                }
-            },
+            action: handleNewSession,
         },
         {
             label: "Settings",
@@ -391,45 +376,38 @@ function App() {
                 </svg>
             ),
             action: () => window.electronAPI.windowClose(),
-        }
+        },
     ];
 
     return (
         <div className="h-screen flex flex-col">
-            <header className="h-10 relative flex justify-between items-center glass-panel shadow-glass px-4 py-1 rounded-t-2xl text-white overflow-visible z-50" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}>
-                <div className="flex items-center gap-3">
-                    <div className="relative" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+            <header
+                className="h-10 relative flex items-center glass-panel shadow-glass px-2 py-1 rounded-t-2xl text-white overflow-visible z-50"
+                style={{ WebkitAppRegion: "drag" } as React.CSSProperties}
+            >
+                {/* Left: menu + logo */}
+                <div className="flex items-center gap-2 flex-shrink-0" style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}>
+                    <div className="relative">
                         <button
-                            onClick={(e) => {
-                                e.stopPropagation();
-                                setMenuOpen(!menuOpen);
-                            }}
-                            className="group p-2.5 rounded-xl hover:bg-white/10  hover:border-purple-500/30 transition-all duration-300 hover:shadow-[0_0_20px_rgba(168,85,247,0.2)]"
+                            onClick={(e) => { e.stopPropagation(); setMenuOpen(!menuOpen); }}
+                            className="group p-2 rounded-xl hover:bg-white/10 transition-all duration-300"
                         >
                             <div className="relative w-5 h-5">
-                                <span className={`absolute left-0 top-1/2 -translate-y-1/2 h-0.5 w-5 bg-purple-200 group-hover:bg-purple-100 rounded-full transition-all duration-300 ${menuOpen ? 'rotate-45 top-1/2' : '-translate-y-2'}`} />
-                                <span className={`absolute left-0 top-1/2 -translate-y-1/2 h-0.5 w-5 bg-purple-200 group-hover:bg-purple-100 rounded-full transition-all duration-300 ${menuOpen ? 'opacity-0' : 'opacity-100'}`} />
-                                <span className={`absolute left-0 top-1/2 -translate-y-1/2 h-0.5 w-5 bg-purple-200 group-hover:bg-purple-100 rounded-full transition-all duration-300 ${menuOpen ? '-rotate-45 top-1/2' : 'translate-y-2'}`} />
+                                <span className={`absolute left-0 top-1/2 -translate-y-1/2 h-0.5 w-5 bg-purple-200 group-hover:bg-purple-100 rounded-full transition-all duration-300 ${menuOpen ? "rotate-45 top-1/2" : "-translate-y-2"}`} />
+                                <span className={`absolute left-0 top-1/2 -translate-y-1/2 h-0.5 w-5 bg-purple-200 group-hover:bg-purple-100 rounded-full transition-all duration-300 ${menuOpen ? "opacity-0" : "opacity-100"}`} />
+                                <span className={`absolute left-0 top-1/2 -translate-y-1/2 h-0.5 w-5 bg-purple-200 group-hover:bg-purple-100 rounded-full transition-all duration-300 ${menuOpen ? "-rotate-45 top-1/2" : "translate-y-2"}`} />
                             </div>
                         </button>
-                        <div
-                            className={`absolute top-full left-0 mt-2 w-48 transition-all duration-300 ease-out ${menuOpen ? 'opacity-100 translate-y-0 visible' : 'opacity-0 translate-y-2 invisible'
-                                }`}
-                        >
+                        <div className={`absolute top-full left-0 mt-2 w-48 transition-all duration-300 ease-out ${menuOpen ? "opacity-100 translate-y-0 visible" : "opacity-0 translate-y-2 invisible"}`}>
                             <div className="bg-gradient-to-br from-primary-800 to-primary-900 backdrop-blur-xl rounded-2xl shadow-2xl border border-white/10 overflow-hidden">
                                 <div className="p-1">
                                     {menuItems.map((item, index) => (
                                         <div key={index}>
                                             <button
-                                                onClick={() => {
-                                                    item.action();
-                                                    setMenuOpen(false);
-                                                }}
+                                                onClick={() => { item.action(); setMenuOpen(false); }}
                                                 className="w-full px-4 py-2.5 text-left text-sm text-purple-200 hover:text-white rounded-xl hover:bg-white/10 transition-all duration-200 flex items-center gap-3 group"
                                             >
-                                                <span className="text-purple-400 group-hover:text-purple-300 transition-colors">
-                                                    {item.icon}
-                                                </span>
+                                                <span className="text-purple-400 group-hover:text-purple-300 transition-colors">{item.icon}</span>
                                                 {item.label}
                                             </button>
                                             {index < menuItems.length - 1 && <hr className="border-white/10 my-1" />}
@@ -439,19 +417,57 @@ function App() {
                             </div>
                         </div>
                     </div>
-
-                    <div className="flex items-center gap-2">
-
-                        <h1 className="font-semibold text-2xl tracking-wide bg-gradient-to-r from-purple-100 via-indigo-200 to-purple-200 bg-clip-text text-transparent">
-                            Elizabeth
-                        </h1>
-                    </div>
+                    <h1 className="font-semibold text-xl tracking-wide bg-gradient-to-r from-purple-100 via-indigo-200 to-purple-200 bg-clip-text text-transparent pr-2">
+                        Elizabeth
+                    </h1>
                 </div>
 
-                <div className="flex items-center gap-1" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+                {/* Tab bar */}
+                <div
+                    className="flex-1 flex items-center gap-1 overflow-x-auto min-w-0 px-1"
+                    style={{ WebkitAppRegion: "no-drag", scrollbarWidth: "none" } as React.CSSProperties}
+                >
+                    {tabs.map((tab) => (
+                        <button
+                            key={tab.id}
+                            onClick={() => setActiveTabId(tab.id)}
+                            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium max-w-[140px] min-w-[60px] flex-shrink-0 transition-all duration-200 group/tab ${
+                                tab.id === activeTabId
+                                    ? "bg-purple-500/30 text-white border border-purple-500/40"
+                                    : "text-purple-300/70 hover:bg-white/10 hover:text-purple-200 border border-transparent"
+                            }`}
+                        >
+                            <span className="truncate flex-1 text-left">{getTabLabel(tab)}</span>
+                            {tabs.length > 1 && (
+                                <span
+                                    onClick={(e) => handleCloseTab(tab.id, e)}
+                                    className="flex-shrink-0 w-3.5 h-3.5 flex items-center justify-center rounded hover:bg-white/20 text-purple-400 hover:text-white opacity-0 group-hover/tab:opacity-100 transition-opacity"
+                                >
+                                    <svg className="w-2.5 h-2.5" viewBox="0 0 10 10" fill="currentColor">
+                                        <path d="M6.414 5l2.293-2.293a1 1 0 00-1.414-1.414L5 3.586 2.707 1.293a1 1 0 00-1.414 1.414L3.586 5 1.293 7.293a1 1 0 001.414 1.414L5 6.414l2.293 2.293a1 1 0 001.414-1.414L6.414 5z" />
+                                    </svg>
+                                </span>
+                            )}
+                        </button>
+                    ))}
+                    {tabs.length < 10 && (
+                        <button
+                            onClick={handleNewTab}
+                            className="flex-shrink-0 p-1 rounded-lg hover:bg-white/10 text-purple-400 hover:text-purple-200 transition-colors"
+                            title="New tab"
+                        >
+                            <svg className="w-4 h-4" viewBox="0 0 20 20" fill="currentColor">
+                                <path d="M10 5a1 1 0 011 1v3h3a1 1 0 110 2h-3v3a1 1 0 11-2 0v-3H6a1 1 0 110-2h3V6a1 1 0 011-1z" />
+                            </svg>
+                        </button>
+                    )}
+                </div>
+
+                {/* Right: window controls */}
+                <div className="flex items-center gap-1 flex-shrink-0" style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}>
                     <button
-                        onClick={async () => window.electronAPI.windowMinimize()}
-                        className="group p-2 rounded-xl hover:bg-white/10 text-purple-300 hover:text-white transition-all duration-200 hover:shadow-[0_0_15px_rgba(168,85,247,0.2)]"
+                        onClick={() => window.electronAPI.windowMinimize()}
+                        className="p-2 rounded-xl hover:bg-white/10 text-purple-300 hover:text-white transition-all duration-200"
                         title="Minimize"
                     >
                         <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
@@ -460,7 +476,7 @@ function App() {
                     </button>
                     <button
                         onClick={() => window.electronAPI.windowMaximize()}
-                        className="group p-2 rounded-xl hover:bg-white/10 text-purple-300 hover:text-white transition-all duration-200 hover:shadow-[0_0_15px_rgba(168,85,247,0.2)]"
+                        className="p-2 rounded-xl hover:bg-white/10 text-purple-300 hover:text-white transition-all duration-200"
                         title="Maximize"
                     >
                         <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
@@ -469,7 +485,7 @@ function App() {
                     </button>
                     <button
                         onClick={() => window.electronAPI.windowClose()}
-                        className="group p-2 rounded-xl hover:bg-red-500/80 text-purple-300 hover:text-white transition-all duration-200"
+                        className="p-2 rounded-xl hover:bg-red-500/80 text-purple-300 hover:text-white transition-all duration-200"
                         title="Close"
                     >
                         <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
@@ -478,15 +494,14 @@ function App() {
                     </button>
                 </div>
             </header>
-            <div className="relative flex h-full bg-primary-950 p-3 gap-3 z-0 min-h-0">
 
-                {/* Main Content - Explorer or Viewer */}
-                {viewMode === "explorer" ? (
+            <div className="relative flex h-full bg-primary-950 p-3 gap-3 z-0 min-h-0">
+                {/* Main Content */}
+                {activeTab.viewMode === "explorer" ? (
                     <>
-                        {/* File Explorer - 60% */}
                         <div className="flex-[3] h-full rounded-2xl overflow-hidden glass-panel shadow-glass">
                             <FileExplorer
-                                currentPath={currentPath || ""}
+                                currentPath={activeTab.currentPath}
                                 onNavigate={handleFileExplorerNavigate}
                                 onFileClick={handleFileClick}
                                 onEmbedAll={handleEmbedAll}
@@ -495,64 +510,51 @@ function App() {
                                 refreshKey={folderRefreshKey}
                             />
                         </div>
-                        {/* Unified Panel - 40% */}
                         <div className="flex-[2] h-full rounded-2xl overflow-hidden glass-panel shadow-glass">
                             <UnifiedPanel
-                                currentPath={currentPath || ""}
+                                currentPath={activeTab.currentPath}
                                 onNavigate={handleFileExplorerNavigate}
                                 onFileSelect={(file) => {
                                     handleFileClick(file);
-                                    setSelectedFile(file);
-                                    setViewMode("viewer");
+                                    updateActiveTab({ selectedFile: file, viewMode: "viewer" });
                                 }}
                                 mode="explorer"
-                                pdfPath={pdfPath}
+                                pdfPath={activeTab.pdfPath}
                                 sessionId={sessionId}
                                 selectedText={selectedText}
                                 onClearSelection={handleClearSelection}
                                 onNewSession={handleNewSession}
                                 onSessionChange={handleSessionChange}
                                 onDeleteSession={handleDeleteSession}
-                                onRefreshFolder={() => setFolderRefreshKey(k => k + 1)}
+                                onRefreshFolder={() => setFolderRefreshKey((k) => k + 1)}
                             />
                         </div>
                     </>
                 ) : (
                     <>
-                        {/* TOC Panel */}
-                        <div
-                            className={`h-full rounded-2xl overflow-hidden glass-panel shadow-glass transition-all duration-300 ${tocOpen ? "w-72 opacity-100" : "w-0 opacity-0 overflow-hidden"}`}
-                        >
-                            {tocOpen && pdf && (
-                                <TOCPanel pdf={pdf} onNavigate={handleNavigate} currentPage={currentPage} />
+                        <div className={`h-full rounded-2xl overflow-hidden glass-panel shadow-glass transition-all duration-300 ${tocOpen ? "w-72 opacity-100" : "w-0 opacity-0 overflow-hidden"}`}>
+                            {tocOpen && activeTab.pdf && (
+                                <TOCPanel pdf={activeTab.pdf} onNavigate={handleNavigate} currentPage={activeTab.currentPage} />
                             )}
                         </div>
 
-                        {/* PDF Viewer */}
                         <div className="flex-[3] h-full rounded-2xl overflow-hidden glass-panel shadow-glass">
                             <div className="h-full flex flex-col">
-                                {/* Combined Header */}
                                 <div className="p-3 border-b border-white/10">
                                     <div className="flex items-center justify-between">
                                         <div className="flex items-center gap-2">
                                             <button
-                                                onClick={() => {
-                                                    setViewMode("explorer");
-                                                    setSelectedFile(null);
-                                                }}
+                                                onClick={() => updateActiveTab({ viewMode: "explorer", selectedFile: null })}
                                                 className="p-2 rounded-lg hover:bg-white/10 text-purple-300 hover:text-white transition-colors"
                                             >
                                                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
                                                 </svg>
                                             </button>
-                                            <span className="text-white font-medium">{selectedFile?.name}</span>
+                                            <span className="text-white font-medium">{activeTab.selectedFile?.name}</span>
                                         </div>
                                         <button
-                                            onClick={() => {
-                                                setViewMode("explorer");
-                                                setSelectedFile(null);
-                                            }}
+                                            onClick={() => updateActiveTab({ viewMode: "explorer", selectedFile: null })}
                                             className="p-2 rounded-lg hover:bg-white/10 text-purple-300 hover:text-white transition-colors"
                                         >
                                             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -560,17 +562,16 @@ function App() {
                                             </svg>
                                         </button>
                                     </div>
-                                    {/* Progress Bar */}
-                                    {(isEmbedding || (batchEmbedding && batchProgress?.fileName === fileName)) && (
+                                    {(activeTab.isEmbedding || (batchEmbedding && batchProgress?.fileName === activeTab.fileName)) && (
                                         <div className="mt-2">
                                             <div className="flex items-center justify-between text-xs text-purple-300 mb-1">
                                                 <span>Embedding document...</span>
-                                                <span>{isEmbedding ? embeddingProgress : (batchProgress?.fileProgress || 0)}%</span>
+                                                <span>{activeTab.isEmbedding ? activeTab.embeddingProgress : (batchProgress?.fileProgress || 0)}%</span>
                                             </div>
                                             <div className="h-1.5 bg-white/10 rounded-full overflow-hidden">
                                                 <div
                                                     className="h-full bg-purple-500 rounded-full transition-all duration-300"
-                                                    style={{ width: `${isEmbedding ? embeddingProgress : (batchProgress?.fileProgress || 0)}%` }}
+                                                    style={{ width: `${activeTab.isEmbedding ? activeTab.embeddingProgress : (batchProgress?.fileProgress || 0)}%` }}
                                                 />
                                             </div>
                                         </div>
@@ -578,10 +579,10 @@ function App() {
                                 </div>
                                 <div className="flex-1 overflow-hidden">
                                     <PDFViewer
-                                        pdfData={pdfData}
+                                        pdfData={activeTab.pdfData}
                                         onTextSelect={handleTextSelect}
-                                        fileName={fileName || undefined}
-                                        navigateToPage={currentPage}
+                                        fileName={activeTab.fileName || undefined}
+                                        navigateToPage={activeTab.currentPage}
                                         onPageChange={handlePageChange}
                                         onPdfLoad={handlePdfLoad}
                                     />
@@ -589,45 +590,38 @@ function App() {
                             </div>
                         </div>
 
-                        {/* Unified Panel */}
                         <div className="flex-[2] h-full rounded-2xl overflow-hidden glass-panel shadow-glass">
                             <UnifiedPanel
-                                currentPath={currentPath || ""}
+                                currentPath={activeTab.currentPath}
                                 onNavigate={handleFileExplorerNavigate}
                                 onFileSelect={(file) => {
                                     handleFileClick(file);
-                                    setSelectedFile(file);
+                                    updateActiveTab({ selectedFile: file });
                                 }}
                                 mode="viewer"
-                                pdfPath={pdfPath}
+                                pdfPath={activeTab.pdfPath}
                                 sessionId={sessionId}
                                 selectedText={selectedText}
                                 onClearSelection={handleClearSelection}
                                 onNewSession={handleNewSession}
                                 onSessionChange={handleSessionChange}
                                 onDeleteSession={handleDeleteSession}
-                                onBack={() => {
-                                    setViewMode("explorer");
-                                    setSelectedFile(null);
-                                }}
-                                isEmbedding={isEmbedding || (batchEmbedding && batchProgress?.fileName === fileName)}
-                                embeddingProgress={isEmbedding ? embeddingProgress : (batchProgress?.fileProgress || 0)}
+                                onBack={() => updateActiveTab({ viewMode: "explorer", selectedFile: null })}
+                                isEmbedding={activeTab.isEmbedding || (batchEmbedding && batchProgress?.fileName === activeTab.fileName)}
+                                embeddingProgress={activeTab.isEmbedding ? activeTab.embeddingProgress : (batchProgress?.fileProgress || 0)}
                             />
                         </div>
                     </>
                 )}
 
-                {/* Documents Panel - Left Side */}
-                <div
-                    className={`h-full rounded-2xl overflow-hidden glass-panel shadow-glass transition-all duration-300 ease-in-out ${docsOpen ? "w-80 opacity-100" : "w-0 opacity-0 p-0"
-                        }`}
-                >
+                {/* Documents Panel */}
+                <div className={`h-full rounded-2xl overflow-hidden glass-panel shadow-glass transition-all duration-300 ease-in-out ${docsOpen ? "w-80 opacity-100" : "w-0 opacity-0 p-0"}`}>
                     {docsOpen && (
                         <div className="h-full flex flex-col">
                             <div className="p-4 border-b border-white/10">
                                 <h3 className="text-lg font-semibold text-purple-200">Documents</h3>
                                 <p className="text-xs text-purple-400/70 mt-1">
-                                    {documents.filter(doc => currentPath && doc.file_path && doc.file_path.startsWith(currentPath)).length} document{documents.filter(doc => currentPath && doc.file_path && doc.file_path.startsWith(currentPath)).length !== 1 ? 's' : ''} in folder
+                                    {documents.filter((doc) => activeTab.currentPath && doc.file_path && doc.file_path.startsWith(activeTab.currentPath)).length} document{documents.filter((doc) => activeTab.currentPath && doc.file_path && doc.file_path.startsWith(activeTab.currentPath)).length !== 1 ? "s" : ""} in folder
                                 </p>
                             </div>
                             <div className="flex-1 overflow-y-auto p-2 space-y-2">
@@ -642,33 +636,20 @@ function App() {
                                                 <div className="absolute -bottom-1 -right-1 w-3 h-3 bg-purple-500 rounded-full"></div>
                                             </div>
                                             <div className="flex-1 min-w-0">
-                                                <div className="flex items-center justify-between">
-                                                    <p className="text-sm font-medium text-purple-200 truncate">
-                                                        {batchProgress.fileName}
-                                                    </p>
-                                                    <span className="text-xs text-purple-400 ml-2">Loading</span>
-                                                </div>
-                                                <p className="text-xs text-purple-400/70 truncate mt-0.5">
-                                                    Embedding document...
-                                                </p>
+                                                <p className="text-sm font-medium text-purple-200 truncate">{batchProgress.fileName}</p>
+                                                <p className="text-xs text-purple-400/70 truncate mt-0.5">Embedding document...</p>
                                                 <div className="mt-2 h-1 bg-white/10 rounded-full overflow-hidden">
-                                                    <div
-                                                        className="h-full bg-purple-500 rounded-full transition-all duration-300"
-                                                        style={{ width: `${Math.min(99, Math.max(0, batchProgress.fileProgress))}%` }}
-                                                    />
+                                                    <div className="h-full bg-purple-500 rounded-full transition-all duration-300" style={{ width: `${Math.min(99, Math.max(0, batchProgress.fileProgress))}%` }} />
                                                 </div>
                                             </div>
                                         </div>
                                     </div>
                                 )}
-                                {documents.filter(doc => currentPath && doc.file_path && doc.file_path.startsWith(currentPath)).map((doc) => (
+                                {documents.filter((doc) => activeTab.currentPath && doc.file_path && doc.file_path.startsWith(activeTab.currentPath)).map((doc) => (
                                     <button
                                         key={doc.id}
                                         onClick={() => handleSwitchDocument(doc.id)}
-                                        className={`w-full text-left p-3 rounded-xl transition-all duration-200 ${currentDocId === doc.id
-                                            ? "bg-purple-500/30 border border-purple-500/30"
-                                            : "bg-white/5 hover:bg-white/10 border border-transparent"
-                                            }`}
+                                        className={`w-full text-left p-3 rounded-xl transition-all duration-200 ${currentDocId === doc.id ? "bg-purple-500/30 border border-purple-500/30" : "bg-white/5 hover:bg-white/10 border border-transparent"}`}
                                     >
                                         <div className="flex items-start gap-3">
                                             <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-purple-400 mt-0.5 flex-shrink-0" viewBox="0 0 20 20" fill="currentColor">
@@ -676,26 +657,19 @@ function App() {
                                             </svg>
                                             <div className="flex-1 min-w-0">
                                                 <div className="flex items-center justify-between">
-                                                    <p className="text-sm font-medium text-purple-200 truncate">
-                                                        {doc.file_name}
-                                                    </p>
+                                                    <p className="text-sm font-medium text-purple-200 truncate">{doc.file_name}</p>
                                                     <button
                                                         onClick={(e) => handleDeleteDocument(e, doc.id)}
                                                         className="p-1 rounded-lg hover:bg-red-500/30 text-purple-400 hover:text-red-400 transition-colors"
-                                                        title="Remove document"
                                                     >
                                                         <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
                                                             <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clipRule="evenodd" />
                                                         </svg>
                                                     </button>
                                                 </div>
-                                                <p className="text-xs text-purple-400/60 mt-1">
-                                                    {doc.total_chunks} chunks • {new Date(doc.last_accessed).toLocaleDateString()}
-                                                </p>
+                                                <p className="text-xs text-purple-400/60 mt-1">{doc.total_chunks} chunks • {new Date(doc.last_accessed).toLocaleDateString()}</p>
                                                 {currentDocId === doc.id && (
-                                                    <span className="inline-block mt-2 text-xs bg-purple-500/30 text-purple-300 px-2 py-0.5 rounded-full">
-                                                        Current
-                                                    </span>
+                                                    <span className="inline-block mt-2 text-xs bg-purple-500/30 text-purple-300 px-2 py-0.5 rounded-full">Current</span>
                                                 )}
                                             </div>
                                         </div>
@@ -719,10 +693,7 @@ function App() {
                 <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-primary-900 rounded-full px-2 py-2 flex items-center gap-2 shadow-glass">
                     <button
                         onClick={() => setDocsOpen(!docsOpen)}
-                        className={`p-2 rounded-full transition-all duration-200 ${docsOpen
-                            ? "bg-purple-500/30 text-purple-200"
-                            : "bg-white/5 text-primary-300 hover:bg-white/10"
-                            }`}
+                        className={`p-2 rounded-full transition-all duration-200 ${docsOpen ? "bg-purple-500/30 text-purple-200" : "bg-white/5 text-primary-300 hover:bg-white/10"}`}
                         title="Documents Library"
                     >
                         <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
@@ -733,50 +704,27 @@ function App() {
                     <div className="w-px h-5 bg-white/10" />
                     <button
                         onClick={() => setTocOpen(!tocOpen)}
-                        className={`p-2 rounded-full transition-all duration-200 ${tocOpen
-                            ? "bg-purple-500/30 text-purple-200"
-                            : "bg-white/5 text-primary-300 hover:bg-white/10"
-                            }`}
+                        className={`p-2 rounded-full transition-all duration-200 ${tocOpen ? "bg-purple-500/30 text-purple-200" : "bg-white/5 text-primary-300 hover:bg-white/10"}`}
                         title="Toggle Table of Contents"
                     >
-                        <svg
-                            xmlns="http://www.w3.org/2000/svg"
-                            className="h-5 w-5"
-                            viewBox="0 0 20 20"
-                            fill="currentColor"
-                        >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
                             <path d="M2 4a1 1 0 011-1h2a1 1 0 011 1v2a1 1 0 01-1 1H3a1 1 0 01-1-1V4zM4 8a1 1 0 011-1h6a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V8zM2 14a1 1 0 011-1h2a1 1 0 011 1v2a1 1 0 01-1 1H3a1 1 0 01-1-1v-2zM8 12a1 1 0 011-1h6a1 1 0 011 1v2a1 1 0 01-1 1H9a1 1 0 01-1-1v-2z" />
                         </svg>
                     </button>
                     <div className="w-px h-5 bg-white/10" />
                     <button
                         onClick={() => setChatOpen(!chatOpen)}
-                        className={`p-2 rounded-full transition-all duration-200 ${chatOpen
-                            ? "bg-purple-500/30 text-purple-200"
-                            : "bg-white/5 text-primary-300 hover:bg-white/10"
-                            }`}
+                        className={`p-2 rounded-full transition-all duration-200 ${chatOpen ? "bg-purple-500/30 text-purple-200" : "bg-white/5 text-primary-300 hover:bg-white/10"}`}
                         title="Toggle Chat"
                     >
-                        <svg
-                            xmlns="http://www.w3.org/2000/svg"
-                            className="h-5 w-5"
-                            viewBox="0 0 20 20"
-                            fill="currentColor"
-                        >
-                            <path
-                                fillRule="evenodd"
-                                d="M18 10c0 3.866-3.582 7-8 7a8.841 8.841 0 01-4.083-.98L2 17l1.338-3.123C2.493 12.767 2 11.434 2 10c0-3.866 3.582-7 8-7s8 3.134 8 7zM7 9H5v2h2V9zm8 0h-2v2h2V9zM9 9h2v2H9V9z"
-                                clipRule="evenodd"
-                            />
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                            <path fillRule="evenodd" d="M18 10c0 3.866-3.582 7-8 7a8.841 8.841 0 01-4.083-.98L2 17l1.338-3.123C2.493 12.767 2 11.434 2 10c0-3.866 3.582-7 8-7s8 3.134 8 7zM7 9H5v2h2V9zm8 0h-2v2h2V9zM9 9h2v2H9V9z" clipRule="evenodd" />
                         </svg>
                     </button>
                 </div>
             </div>
 
-            <SettingsModal
-                isOpen={settingsOpen}
-                onClose={() => setSettingsOpen(false)}
-            />
+            <SettingsModal isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} />
         </div>
     );
 }

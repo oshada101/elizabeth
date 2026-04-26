@@ -33,5 +33,3 @@ logs/
 *.db-wal
 *.sqlite
 setup.sh
-
-*.md

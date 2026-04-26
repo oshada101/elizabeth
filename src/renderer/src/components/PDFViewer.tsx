@@ -113,7 +113,7 @@ useEffect(() => {
             setLoadedPages(new Set([1]));
             setPageHeights(new Map());
             setVisiblePage(1);
-            const loadingTask = pdfjsLib.getDocument({ data: pdfData });
+            const loadingTask = pdfjsLib.getDocument({ data: pdfData.slice() });
             loadingTask.promise
                 .then(async (pdfDoc) => {
                     setPdf(pdfDoc);
