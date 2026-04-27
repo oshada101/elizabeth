@@ -378,9 +378,9 @@ const searchCurrentDocTool = tool(
     },
     {
         name: "search_current",
-        description: "Search ONLY the currently open PDF document for relevant information. Use this as the PRIMARY tool when the user asks about the document they're currently viewing.",
+        description: "Search the currently open PDF document.",
         schema: z.object({
-            query: z.string().describe("The search query to find relevant content in the current document"),
+            query: z.string().describe("Search query"),
         }),
     },
 );
@@ -396,10 +396,10 @@ const searchAllDocsTool = tool(
     },
     {
         name: "search_all",
-        description: "Search ALL embedded PDF documents in the library globally. CRITICAL: You MUST ask the user for permission before using this tool. Only set request_permission to true IF the user explicitly said yes to searching all folders.",
+        description: "Search all embedded PDFs globally. Requires explicit user permission.",
         schema: z.object({
-            query: z.string().describe("The search query to find relevant content across all documents"),
-            request_permission: z.boolean().describe("Must be true only if the user explicitly granted permission to search globally.")
+            query: z.string().describe("Search query"),
+            request_permission: z.boolean().describe("Set true only if user explicitly granted permission to search globally")
         }),
     },
 );
@@ -415,9 +415,9 @@ export async function invokeAgent(messages: Array<{ role: string; content: strin
         },
         {
             name: "search_directory",
-            description: "Search ONLY the documents in the user's current folder and its subfolders. Use this as your default and primary search mechanism for any general questions unless otherwise specified.",
+            description: "Search documents in the current folder and subfolders.",
             schema: z.object({
-                query: z.string().describe("The search query"),
+                query: z.string().describe("Search query"),
             }),
         },
     );
@@ -445,9 +445,9 @@ export async function invokeAgent(messages: Array<{ role: string; content: strin
         },
         {
             name: "list_directory_files",
-            description: "List all PDF documents embedded in a specific directory and its subdirectories.",
+            description: "List embedded PDF documents in a directory.",
             schema: z.object({
-                currentPath: z.string().optional().describe("Optional directory path to filter documents"),
+                currentPath: z.string().optional().describe("Directory path to filter"),
             }),
         },
     );
@@ -485,38 +485,21 @@ export async function invokeAgent(messages: Array<{ role: string; content: strin
         },
         {
             name: "list_all_files",
-            description: "List ALL files and folders (including non-PDFs) in specific folders. ALWAYS ask the user which folder(s) they want to list before calling this tool — do not assume.",
+            description: "List all files and folders (including non-PDFs) in specified folders.",
             schema: z.object({
-                folders: z.array(z.string()).describe("Full paths of the folders to list (one level deep, no recursion)"),
+                folders: z.array(z.string()).describe("Full folder paths to list"),
             }),
         },
     );
 
     const organizeFolderTool = tool(
-        async (input: { action: string; targetPath: string; strategy?: string; includeSubfolders?: boolean; flatten?: boolean; customGroups?: { folder: string; files: string[]; filePaths: string[] }[] }) => {
-            const { targetPath, strategy = 'type', includeSubfolders = true, flatten = false } = input;
-
-            function getAllFiles(dirPath: string): string[] {
-                const allFiles: string[] = [];
-                try {
-                    const entries = readdirSync(dirPath, { withFileTypes: true });
-                    for (const entry of entries) {
-                        const fullPath = join(dirPath, entry.name);
-                        if (entry.isDirectory()) {
-                            if (includeSubfolders) allFiles.push(...getAllFiles(fullPath));
-                        } else {
-                            allFiles.push(fullPath);
-                        }
-                    }
-                } catch (e) {
-                    log.error('Error scanning directory:', e);
-                }
-                return allFiles;
-            }
+        async (input: { action: string; targetPath: string; filePaths: string[]; strategy?: string; flatten?: boolean; customGroups?: { folder: string; files: string[]; filePaths: string[] }[] }) => {
+            const { targetPath, strategy = 'type', flatten = false } = input;
+            // filePaths comes from list_all_files — no directory scanning here
+            const allFiles = (input.filePaths || []).filter(p => !p.endsWith('/'));
 
             // Semantic: return file list + PDF content snippets for LLM to propose groupings
             if (input.action === "semantic_analyze") {
-                const allFiles = getAllFiles(targetPath);
                 const allDocs = getAllDocuments();
                 const fileData = await Promise.all(allFiles.map(async (filePath) => {
                     const fileName = filePath.split(/[\\/]/).pop() || '';
@@ -558,7 +541,6 @@ export async function invokeAgent(messages: Array<{ role: string; content: strin
 
             // Standard analyze
             if (input.action === "analyze") {
-                const allFiles = getAllFiles(targetPath);
                 const groups: Record<string, { files: string[]; filePaths: string[] }> = {};
 
                 for (const filePath of allFiles) {
@@ -581,7 +563,6 @@ export async function invokeAgent(messages: Array<{ role: string; content: strin
                     groups[groupKey].filePaths.push(filePath);
                 }
 
-                const subfolders = includeSubfolders ? readdirSync(targetPath, { withFileTypes: true }).filter(e => e.isDirectory()).map(e => e.name) : [];
                 return JSON.stringify({
                     type: "organize_plan",
                     targetPath,
@@ -592,27 +573,26 @@ export async function invokeAgent(messages: Array<{ role: string; content: strin
                         files: data.files,
                         filePaths: data.filePaths
                     })),
-                    subfoldersScanned: subfolders,
                     totalFiles: allFiles.length
                 });
             }
 
-            return "Use action 'analyze' for standard grouping preview, or 'semantic_analyze' to get content data for AI-proposed groupings. Execution happens via the UI confirmation.";
+            return "Use action 'analyze' for standard grouping preview, or 'semantic_analyze' to fetch content snippets for AI-proposed groupings. Execution happens via the UI confirmation.";
         },
         {
             name: "organize_folder",
-            description: "Analyze or reorganize files in a folder. Use 'analyze' for standard strategies (type/date/name/flatten), 'semantic_analyze' to get file content data so you can propose smart semantic groupings.",
+            description: "Group files into a folder organization plan. Does NOT scan disk — you must pass file paths from list_all_files. 'analyze' for standard grouping, 'semantic_analyze' to fetch content snippets for AI-proposed groupings.",
             schema: z.object({
-                action: z.enum(["analyze", "semantic_analyze"]).describe("'analyze' for standard grouping preview (or custom with customGroups), 'semantic_analyze' to fetch content data for semantic grouping"),
-                targetPath: z.string().describe("The folder path to organize"),
-                strategy: z.enum(["type", "date", "name"]).optional().describe("How to group: 'type' (by extension), 'date' (by year), 'name' (by first word)"),
-                includeSubfolders: z.boolean().optional().describe("Include files from subfolders (default: true)"),
-                flatten: z.boolean().optional().describe("Move all files to root, removing subfolders (default: false)"),
+                action: z.enum(["analyze", "semantic_analyze"]).describe("analyze: standard grouping preview; semantic_analyze: fetch PDF content snippets for semantic grouping"),
+                targetPath: z.string().describe("Folder path being organized"),
+                filePaths: z.array(z.string()).describe("Full file paths to organize — pass the paths from list_all_files output (exclude directories)"),
+                strategy: z.enum(["type", "date", "name"]).optional().describe("type=by extension, date=by year, name=by first word"),
+                flatten: z.boolean().optional().describe("Flatten all files to root (default: false)"),
                 customGroups: z.array(z.object({
-                    folder: z.string().describe("Subfolder name to create"),
-                    files: z.array(z.string()).describe("File display names for UI"),
-                    filePaths: z.array(z.string()).describe("Full file paths for execution")
-                })).optional().describe("Custom file-to-folder mapping (use with action='analyze' after semantic_analyze)")
+                    folder: z.string().describe("Subfolder name"),
+                    files: z.array(z.string()).describe("File display names"),
+                    filePaths: z.array(z.string()).describe("Full file paths")
+                })).optional().describe("Custom grouping map (use with analyze after semantic_analyze)")
             }),
         },
     );
@@ -694,13 +674,13 @@ export async function invokeAgent(messages: Array<{ role: string; content: strin
         },
         {
             name: "convert_document",
-            description: "Convert PowerPoint (PPTX) files to PDF format. Use 'analyze' to preview the conversion, 'convert' to execute after user confirms.",
+            description: "Convert PowerPoint (PPTX) files to PDF. 'analyze' previews, 'convert' executes after confirmation.",
             schema: z.object({
-                action: z.enum(["analyze", "convert"]).describe("Action: 'analyze' to preview conversion, 'convert' to execute (only after user confirms)"),
+                action: z.enum(["analyze", "convert"]).describe("analyze to preview, convert to execute"),
                 files: z.array(z.object({
-                    filePath: z.string().describe("Path to the PowerPoint file (.pptx or .ppt)"),
-                    outputPath: z.string().optional().describe("Output PDF path (default: same directory with .pdf extension)")
-                })).describe("Array of files to convert")
+                    filePath: z.string().describe("PowerPoint file path"),
+                    outputPath: z.string().optional().describe("Output PDF path (default: same dir, .pdf extension)")
+                })).describe("Files to convert")
             }),
         },
     );
@@ -725,12 +705,12 @@ export async function invokeAgent(messages: Array<{ role: string; content: strin
         },
         {
             name: "move_files",
-            description: "Move specific files to new locations. Returns a move plan for user confirmation. Use when user explicitly wants to move specific files.",
+            description: "Move files to new locations. Returns move plan for UI confirmation.",
             schema: z.object({
                 moves: z.array(z.object({
-                    from: z.string().describe("Source file path (full path)"),
-                    to: z.string().describe("Destination file path (full path including filename)")
-                })).describe("List of file moves to perform")
+                    from: z.string().describe("Source file path"),
+                    to: z.string().describe("Destination file path")
+                })).describe("File moves to perform")
             })
         }
     );
@@ -753,10 +733,10 @@ export async function invokeAgent(messages: Array<{ role: string; content: strin
         },
         {
             name: "rename_file",
-            description: "Rename a file or folder. Returns a rename plan for user confirmation.",
+            description: "Rename a file or folder. Returns rename plan for UI confirmation.",
             schema: z.object({
-                oldPath: z.string().describe("Full path of the file/folder to rename"),
-                newName: z.string().describe("New name (filename only, not the full path)")
+                oldPath: z.string().describe("Full path of file/folder to rename"),
+                newName: z.string().describe("New name only, not full path")
             })
         }
     );
@@ -786,9 +766,9 @@ export async function invokeAgent(messages: Array<{ role: string; content: strin
         },
         {
             name: "delete_files",
-            description: "Delete files or folders. ONLY use when user EXPLICITLY says to delete/remove something. Returns a delete plan requiring user confirmation — nothing is deleted until confirmed.",
+            description: "Delete files or folders. Returns delete plan for UI confirmation.",
             schema: z.object({
-                files: z.array(z.string()).describe("Full paths of files/folders to delete")
+                files: z.array(z.string()).describe("Full paths to delete")
             })
         }
     );
@@ -803,9 +783,9 @@ export async function invokeAgent(messages: Array<{ role: string; content: strin
         },
         {
             name: "create_folder",
-            description: "Create a new folder at the specified path. Executes immediately (safe, non-destructive).",
+            description: "Create a new folder. Executes immediately.",
             schema: z.object({
-                path: z.string().describe("Full path of the folder to create")
+                path: z.string().describe("Full folder path to create")
             })
         }
     );
@@ -868,9 +848,9 @@ export async function invokeAgent(messages: Array<{ role: string; content: strin
         },
         {
             name: "recommend_documents",
-            description: "Find and surface relevant documents for a query. USE THIS when the user asks for study material, lecture notes, lecture material, relevant documents, references, or 'what should I read about X'. Returns clickable document cards in the UI. Do NOT use search_directory instead of this tool for these requests.",
+            description: "Find relevant documents for a query. Returns clickable document cards in the UI.",
             schema: z.object({
-                query: z.string().describe("The topic or question to find relevant documents for")
+                query: z.string().describe("Topic or question to find documents for")
             })
         }
     );
@@ -899,8 +879,10 @@ You have twelve tools. Use them according to these STRICT rules:
 4. By DEFAULT, for ANY general question about their files, use 'search_directory'. This restricts your search to the user's active folder context.
 5. If you cannot find what you're looking for, or if the user explicitly asks to search "all my files" or "everywhere", you MUST ASK FOR PERMISSION FIRST before using 'search_all'. Once they say "yes", use 'search_all' with request_permission: true.
 6. FOLDER ORGANIZATION - Only use when user EXPLICITLY asks to "organize" or "reorganize":
-   - Use 'organize_folder' with action "analyze" and a strategy (type/date/name/flatten) to see the proposed structure.
-   - For SEMANTIC organization (by topic/content): first call 'organize_folder' with action='semantic_analyze' to get file data and content snippets, then propose groupings yourself, then call 'organize_folder' with action='analyze' and customGroups=[{folder:'Name', files:['file.pdf'], filePaths:['/full/path/file.pdf']}].
+   - ALWAYS call 'list_all_files' on the target folder FIRST to get the file list (if not already in context).
+   - Then call 'organize_folder' and pass those full file paths in the 'filePaths' field — do NOT pass directory entries (lines ending with '/').
+   - Use action "analyze" with a strategy (type/date/name) for standard grouping.
+   - For SEMANTIC organization: call 'organize_folder' with action='semantic_analyze' (passing filePaths), then propose groupings yourself, then call 'organize_folder' with action='analyze' and customGroups=[{folder:'Name', files:['file.pdf'], filePaths:['/full/path/file.pdf']}].
    - The UI will show a confirmation dialog. DO NOT suggest organization unless explicitly asked.
 7. DOCUMENT CONVERSION - Only use when user EXPLICITLY asks to "convert" or "export" a PowerPoint to PDF:
    - Use 'convert_document' with action "analyze" to preview. UI shows confirmation. DO NOT suggest unless explicitly asked.
