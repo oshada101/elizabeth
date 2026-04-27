@@ -35,6 +35,17 @@ interface ConvertDocumentApi {
     execute: (files: { inputPath: string; outputPath: string }[]) => Promise<{ success: boolean; totalFiles: number; successCount: number; failedCount: number; results: { fileName: string; success: boolean; outputPath?: string; error?: string }[] }>;
 }
 
+interface EmbeddingSettings {
+    model: string;
+    baseUrl: string;
+    embeddingDim: number;
+}
+
+interface SettingsApi {
+    getEmbedding: () => Promise<EmbeddingSettings>;
+    saveEmbedding: (settings: EmbeddingSettings) => Promise<void>;
+}
+
 interface ElectronAPI {
     openFileDialog: () => Promise<string | null>;
     readFile: (filePath: string) => Promise<Buffer | null>;
@@ -62,6 +73,7 @@ interface ElectronAPI {
     windowMaximize: () => void;
     windowClose: () => void;
     apiKeys: ApiKeysApi;
+    settings: SettingsApi;
 }
 
 declare global {

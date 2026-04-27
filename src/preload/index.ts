@@ -138,6 +138,10 @@ const api = {
         setDefault: (id: string) => ipcRenderer.invoke("api-keys:set-default", id),
         update: (id: string, data: any) => ipcRenderer.invoke("api-keys:update", id, data),
     },
+    settings: {
+        getEmbedding: (): Promise<{ model: string; baseUrl: string; embeddingDim: number }> => ipcRenderer.invoke("settings:getEmbedding"),
+        saveEmbedding: (settings: { model: string; baseUrl: string; embeddingDim: number }): Promise<void> => ipcRenderer.invoke("settings:saveEmbedding", settings),
+    },
 };
 
 contextBridge.exposeInMainWorld("electronAPI", api);

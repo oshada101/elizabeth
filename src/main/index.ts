@@ -11,6 +11,7 @@ async function getAgent() {
 }
 import { updateDocumentPath, getDocumentsByPath } from './documentRegistry'
 import * as keyManager from './keyManager'
+import { getEmbeddingSettings, saveEmbeddingSettings } from './settingsManager'
 
 log.initialize()
 log.info('App starting...')
@@ -336,6 +337,14 @@ ipcMain.handle('api-keys:set-default', async (_event, id) => {
 
 ipcMain.handle('api-keys:update', async (_event, id: string, data: { account?: string, provider?: string, label?: string, isDefault?: boolean, models?: string[], apiKey?: string, baseUrl?: string }) => {
   return keyManager.updateApiKey(id, data)
+})
+
+ipcMain.handle('settings:getEmbedding', () => {
+  return getEmbeddingSettings()
+})
+
+ipcMain.handle('settings:saveEmbedding', (_event, settings: { model: string, baseUrl: string, embeddingDim: number }) => {
+  saveEmbeddingSettings(settings)
 })
 
 ipcMain.handle('window-minimize', () => {

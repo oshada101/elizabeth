@@ -21,6 +21,7 @@ import {
 } from "./documentRegistry";
 import { db } from './db';
 import { app, dialog } from 'electron';
+import { getEmbeddingSettings } from './settingsManager';
 import { join, dirname } from 'path';
 import { existsSync, readdirSync, statSync, readFileSync, writeFileSync, mkdirSync, renameSync, rmSync } from 'fs';
 import log from 'electron-log';
@@ -58,8 +59,6 @@ const vectorDbPath = join(userDataPath, 'vectors.db');
 export { db };
 export const saver = new SqliteSaver(db);
 
-// all-minilm produces 384-dimensional embeddings
-const EMBEDDING_DIM = 384;
 const TABLE_NAME = "pdf_vectors";
 const COLUMN_NAME = "embedding";
 
@@ -70,12 +69,13 @@ const libsqlClient = createClient({
 
 // Initialize vector store table
 async function initVectorStore() {
+    const embeddingDim = getEmbeddingSettings().embeddingDim;
     await libsqlClient.execute(`
         CREATE TABLE IF NOT EXISTS ${TABLE_NAME} (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             content TEXT,
             metadata TEXT,
-            ${COLUMN_NAME} F32_BLOB(${EMBEDDING_DIM})
+            ${COLUMN_NAME} F32_BLOB(${embeddingDim})
         )
     `);
 
@@ -88,17 +88,24 @@ async function initVectorStore() {
 // Initialize on module load
 initVectorStore().catch(err => log.error('Failed to init vector store:', err));
 
-const embeddings = new OllamaEmbeddings({
-    model: "all-minilm:latest",
-    baseUrl: "http://localhost:11434",
-});
+// Lazy cache for vector store - uses current settings at creation time
+let _vectorStore: LibSQLVectorStore | null = null;
 
-// LibSQL vector store - persists to disk, no memory issues
-export const vectorStore = new LibSQLVectorStore(embeddings, {
-    db: libsqlClient,
-    table: TABLE_NAME,
-    column: COLUMN_NAME,
-});
+function getVectorStore(): LibSQLVectorStore {
+    if (!_vectorStore) {
+        const settings = getEmbeddingSettings();
+        const embeddings = new OllamaEmbeddings({
+            model: settings.model,
+            baseUrl: settings.baseUrl,
+        });
+        _vectorStore = new LibSQLVectorStore(embeddings, {
+            db: libsqlClient,
+            table: TABLE_NAME,
+            column: COLUMN_NAME,
+        });
+    }
+    return _vectorStore;
+}
 
 // Text splitter - sized for all-minilm's 256-token context (~500 chars)
 // We use 400 as a safe upper bound since some characters map to multiple tokens.
@@ -127,14 +134,14 @@ async function deleteVectorsForDocument(documentId: string): Promise<void> {
     // We'll need to query and delete by IDs
     try {
         // This is a workaround - query to find matching documents
-        const results = await vectorStore.similaritySearch("test", 1000);
+        const results = await getVectorStore().similaritySearch("test", 1000);
         const docsToDelete = results
             .filter((doc: Document) => doc.metadata.document_id === documentId)
             .map((doc: Document) => doc.metadata.chunk_id as string)
             .filter(Boolean);
 
         if (docsToDelete.length > 0) {
-            await vectorStore.delete({ ids: docsToDelete });
+            await getVectorStore().delete({ ids: docsToDelete });
             log.info(`Deleted ${docsToDelete.length} vectors for document ${documentId.substring(0, 8)}...`);
         }
     } catch (error) {
@@ -219,7 +226,7 @@ async function embedPagesForDocument(pages: string[], documentId: string, onProg
         const batch = allChunks.slice(i, i + BATCH_SIZE);
         try {
             log.info(`Embedding batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(allChunks.length / BATCH_SIZE)} (${batch.length} chunks)`);
-            await vectorStore.addDocuments(batch);
+            await getVectorStore().addDocuments(batch);
             completedChunks += batch.length;
             log.info(`Embedded ${completedChunks}/${allChunks.length} chunks`);
         } catch (error) {
@@ -290,7 +297,7 @@ async function searchCurrentDocument(query: string, k: number = 15): Promise<str
 
     try {
         // Search all then filter by current document
-        const results = await vectorStore.similaritySearch(query, k * 3);
+        const results = await getVectorStore().similaritySearch(query, k * 3);
         const filtered = results.filter((doc: Document) =>
             doc.metadata.document_id === currentDocumentId
         ).slice(0, k);
@@ -311,7 +318,7 @@ async function searchCurrentDocument(query: string, k: number = 15): Promise<str
  */
 async function searchAllDocuments(query: string, k: number = 15): Promise<string> {
     try {
-        const results = await vectorStore.similaritySearch(query, k);
+        const results = await getVectorStore().similaritySearch(query, k);
 
         if (results.length === 0) {
             return "No relevant content found in any document.";
@@ -339,7 +346,7 @@ async function searchDirectoryDocuments(query: string, currentPath: string, k: n
 
     try {
         // Search more broadly to ensure we get enough results after filtering by directory
-        const results = await vectorStore.similaritySearch(query, k * 5);
+        const results = await getVectorStore().similaritySearch(query, k * 5);
 
         // Get all documents that fall under the currentPath
         const allDocs = getAllDocuments();
@@ -509,7 +516,7 @@ export async function invokeAgent(messages: Array<{ role: string; content: strin
                         const docInfo = allDocs.find(d => d.file_path === filePath);
                         if (docInfo) {
                             try {
-                                const results = await vectorStore.similaritySearch(fileName.replace(/\.pdf$/i, ''), 5);
+                                const results = await getVectorStore().similaritySearch(fileName.replace(/\.pdf$/i, ''), 5);
                                 const filtered = results.filter((d: Document) => d.metadata.document_id === docInfo.id);
                                 snippet = filtered.slice(0, 2).map((d: Document) => d.pageContent.substring(0, 150)).join(' ... ');
                             } catch (e) {}
@@ -800,7 +807,7 @@ export async function invokeAgent(messages: Array<{ role: string; content: strin
             }
 
             try {
-                const results = await vectorStore.similaritySearch(searchQuery, 50);
+                const results = await getVectorStore().similaritySearch(searchQuery, 50);
 
                 let filtered = results;
                 if (currentPath) {

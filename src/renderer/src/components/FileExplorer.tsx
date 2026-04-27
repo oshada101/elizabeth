@@ -28,6 +28,20 @@ export default function FileExplorer({ onFileClick, onNavigate, currentPath, onE
     const [loading, setLoading] = useState(true);
     const [viewMode, setViewMode] = useState<"list" | "grid">("list");
     const [breadcrumbs, setBreadcrumbs] = useState<string[]>([]);
+    const [embeddedMap, setEmbeddedMap] = useState<Map<string, string>>(new Map());
+
+    const loadEmbedded = useCallback(async () => {
+        try {
+            const docs = await window.electronAPI.documents.list();
+            const map = new Map<string, string>();
+            docs.forEach((doc: { id: string; file_path: string }) => {
+                map.set(doc.file_path, doc.id);
+            });
+            setEmbeddedMap(map);
+        } catch (error) {
+            console.error("Error loading embedded docs:", error);
+        }
+    }, []);
 
     useEffect(() => {
         if (!currentPath) {
@@ -40,6 +54,7 @@ export default function FileExplorer({ onFileClick, onNavigate, currentPath, onE
                 const entries = await window.electronAPI.fs.readDir(currentPath);
                 if (entries) {
                     setFiles(entries);
+                    await loadEmbedded();
                 }
             } catch (error) {
                 console.error("Error loading directory:", error);
@@ -48,7 +63,7 @@ export default function FileExplorer({ onFileClick, onNavigate, currentPath, onE
             }
         };
         loadDirectory();
-    }, [currentPath, refreshKey]);
+    }, [currentPath, refreshKey, loadEmbedded]);
 
     useEffect(() => {
         if (currentPath) {
@@ -70,6 +85,16 @@ export default function FileExplorer({ onFileClick, onNavigate, currentPath, onE
         const newPath = "/" + pathParts.slice(0, index + 1).join("/");
         onNavigate(newPath);
     }, [currentPath, onNavigate]);
+
+    const handleDeleteEmbedded = useCallback(async (e: React.MouseEvent, hash: string) => {
+        e.stopPropagation();
+        try {
+            await window.electronAPI.documents.delete(hash);
+            await loadEmbedded();
+        } catch (error) {
+            console.error("Error deleting embedded doc:", error);
+        }
+    }, [loadEmbedded]);
 
     const getFileIcon = (file: FileEntry) => {
         if (file.isDirectory) {
@@ -220,6 +245,22 @@ export default function FileExplorer({ onFileClick, onNavigate, currentPath, onE
                                         <div className="flex items-center gap-3">
                                             {getFileIcon(file)}
                                             <span className="text-purple-100 truncate">{file.name}</span>
+                                            {embeddedMap.has(file.path) && (
+                                                <div className="flex items-center gap-1">
+                                                    <span className="text-[10px] bg-green-500/20 text-green-300 rounded-full border border-green-500/30 px-1.5 py-0.5">
+                                                        Embedded
+                                                    </span>
+                                                    <button
+                                                        onClick={(e) => handleDeleteEmbedded(e, embeddedMap.get(file.path)!)}
+                                                        className="p-1 text-primary-400 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-all duration-200"
+                                                        title="Remove from vector store"
+                                                    >
+                                                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                                        </svg>
+                                                    </button>
+                                                </div>
+                                            )}
                                         </div>
                                     </td>
                                     <td className="py-3 text-purple-300/60 text-sm">
@@ -235,16 +276,33 @@ export default function FileExplorer({ onFileClick, onNavigate, currentPath, onE
                 ) : (
                     <div className="grid grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-4">
                         {files.map((file) => (
-                            <button
-                                key={file.path}
-                                onClick={() => handleItemClick(file)}
-                                className="flex flex-col items-center gap-2 p-4 rounded-xl hover:bg-white/5 transition-colors"
-                            >
-                                {getFileIcon(file)}
-                                <span className="text-sm text-purple-100 text-center truncate w-full">
-                                    {file.name}
-                                </span>
-                            </button>
+                            <div key={file.path} className="relative">
+                                <button
+                                    onClick={() => handleItemClick(file)}
+                                    className="flex flex-col items-center gap-2 p-4 rounded-xl hover:bg-white/5 transition-colors w-full"
+                                >
+                                    {getFileIcon(file)}
+                                    <span className="text-sm text-purple-100 text-center truncate w-full">
+                                        {file.name}
+                                    </span>
+                                </button>
+                                {embeddedMap.has(file.path) && (
+                                    <div className="absolute top-1 right-1 flex items-center gap-1">
+                                        <span className="text-[8px] bg-green-500/20 text-green-300 rounded-full border border-green-500/30 px-1 py-0.5">
+                                            Embedded
+                                        </span>
+                                        <button
+                                            onClick={(e) => handleDeleteEmbedded(e, embeddedMap.get(file.path)!)}
+                                            className="p-1 text-primary-400 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-all duration-200"
+                                            title="Remove from vector store"
+                                        >
+                                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                            </svg>
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
                         ))}
                     </div>
                 )}

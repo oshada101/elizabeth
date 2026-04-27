@@ -22,7 +22,7 @@ interface ApiKeyEntry {
 const settingsTabs: { id: SettingsTab; label: string; icon: React.ReactNode }[] = [
     {
         id: "general",
-        label: "General",
+        label: "Embedding",
         icon: (
             <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
                 <path fillRule="evenodd" d="M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.532 1.532 0 01-2.286.948c-1.372-.836-2.942.734-2.106 2.106.54.886.061 2.042-.947 2.287-1.561.379-1.561 2.6 0 2.978a1.532 1.532 0 01.947 2.287c-.836 1.372.734 2.942 2.106 2.106a1.532 1.532 0 012.287.947c.379 1.561 2.6 1.561 2.978 0a1.533 1.533 0 012.287-.947c1.372.836 2.942-.734 2.106-2.106a1.533 1.533 0 01.947-2.287c1.561-.379 1.561-2.6 0-2.978a1.532 1.532 0 01-.947-2.287c.836-1.372-.734-2.942-2.106-2.106a1.532 1.532 0 01-2.287-.947zM10 13a3 3 0 100-6 3 3 0 000 6z" clipRule="evenodd" />
@@ -43,6 +43,8 @@ const settingsTabs: { id: SettingsTab; label: string; icon: React.ReactNode }[] 
 function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     const [activeTab, setActiveTab] = useState<SettingsTab>("general");
     const [apiKeys, setApiKeys] = useState<ApiKeyEntry[]>([]);
+    const [embeddingSettings, setEmbeddingSettings] = useState<{ model: string; baseUrl: string; embeddingDim: number } | null>(null);
+    const [savedEmbedding, setSavedEmbedding] = useState(false);
     const [showAddForm, setShowAddForm] = useState(false);
     const [editingKeyId, setEditingKeyId] = useState<string | null>(null);
     const [showKeyIds, setShowKeyIds] = useState<Set<string>>(new Set());
@@ -79,6 +81,12 @@ function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
             loadApiKeys();
         }
     }, [isOpen, activeTab, loadApiKeys]);
+
+    useEffect(() => {
+        if (isOpen && activeTab === "general" && !embeddingSettings) {
+            window.electronAPI.settings.getEmbedding().then(setEmbeddingSettings);
+        }
+    }, [isOpen, activeTab, embeddingSettings]);
 
     const toggleShowKey = (id: string) => {
         const newSet = new Set(showKeyIds);
@@ -250,8 +258,82 @@ function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                         <div className="animate-fade-in">
                             {activeTab === "general" && (
                                 <div>
-                                    <h3 className="text-lg font-semibold text-white mb-4">General Settings</h3>
-                                    <p className="text-primary-400/60 text-sm">General settings will appear here.</p>
+                                    <h3 className="text-lg font-semibold text-white mb-4">Embedding Settings</h3>
+                                    
+                                    {embeddingSettings ? (
+                                        <div className="space-y-4">
+                                            <div className="p-4 bg-primary-900/30 rounded-xl border border-white/10">
+                                                <h4 className="text-sm font-medium text-purple-200 mb-4 flex items-center gap-2">
+                                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                                                        <path d="M10.394 2.08a1 1 0 00-.788 0l-7 3a1 1 0 000 1.84L5.25 8.051a.999.999 0 01.356-.257l4-1.714a1 1 0 11.788 1.838L7.667 9.088l1.94.831a1 1 0 00.787 0l7-3a1 1 0 000-1.838l-7-3zM3.31 9.397L5 10.12v4.102a8.969 8.969 0 00-1.05-.174 1 1 0 01-.89-.89 11.115 11.115 0 01.25-3.762zM9.3 16.573A9.026 9.026 0 007 14.935v-3.957l1.818.78a1 1 0 11-.788 1.638l-3.165-1.534a1 1 0 00-.745.336l-2.253 2.274a1 1 0 01-1.33 0l-2.274-2.253a1 1 0 00-.745-.336l-3.165 1.534a1 1 0 11-.788-1.638L1 11.186v3.957a9.026 9.026 0 002.638 6.361z" />
+                                                    </svg>
+                                                    Embedding Configuration
+                                                </h4>
+                                                
+                                                <div className="space-y-4">
+                                                    <div>
+                                                        <label className="text-xs text-primary-400/60 mb-1.5 block">Embedding Model</label>
+                                                        <input
+                                                            type="text"
+                                                            value={embeddingSettings.model}
+                                                            onChange={(e) => setEmbeddingSettings({ ...embeddingSettings, model: e.target.value })}
+                                                            className="w-full px-3 py-2.5 bg-white/5 border border-white/10 rounded-lg text-sm text-white placeholder-primary-400/50 focus:outline-none focus:border-purple-500/50 transition-all duration-200"
+                                                            placeholder="all-minilm:latest"
+                                                        />
+                                                    </div>
+                                                    
+                                                    <div>
+                                                        <label className="text-xs text-primary-400/60 mb-1.5 block">Ollama Base URL</label>
+                                                        <input
+                                                            type="text"
+                                                            value={embeddingSettings.baseUrl}
+                                                            onChange={(e) => setEmbeddingSettings({ ...embeddingSettings, baseUrl: e.target.value })}
+                                                            className="w-full px-3 py-2.5 bg-white/5 border border-white/10 rounded-lg text-sm text-white placeholder-primary-400/50 focus:outline-none focus:border-purple-500/50 transition-all duration-200"
+                                                            placeholder="http://localhost:11434"
+                                                        />
+                                                    </div>
+                                                    
+                                                    <div>
+                                                        <label className="text-xs text-primary-400/60 mb-1.5 block">Embedding Dimension</label>
+                                                        <input
+                                                            type="number"
+                                                            value={embeddingSettings.embeddingDim}
+                                                            onChange={(e) => setEmbeddingSettings({ ...embeddingSettings, embeddingDim: parseInt(e.target.value) || 384 })}
+                                                            className="w-full px-3 py-2.5 bg-white/5 border border-white/10 rounded-lg text-sm text-white placeholder-primary-400/50 focus:outline-none focus:border-purple-500/50 transition-all duration-200"
+                                                            placeholder="384"
+                                                        />
+                                                    </div>
+                                                </div>
+                                                
+                                                <div className="mt-4 pt-4 border-t border-white/10">
+                                                    <p className="text-xs text-primary-400/60 mb-3">
+                                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5 inline mr-1" viewBox="0 0 20 20" fill="currentColor">
+                                                            <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                                                        </svg>
+                                                        Changes take effect after restarting the app.
+                                                    </p>
+                                                    <button
+                                                        onClick={async () => {
+                                                            await window.electronAPI.settings.saveEmbedding(embeddingSettings);
+                                                            setSavedEmbedding(true);
+                                                            setTimeout(() => setSavedEmbedding(false), 2000);
+                                                        }}
+                                                        className={`px-4 py-2 text-sm rounded-lg border transition-all duration-300 ${
+                                                            savedEmbedding
+                                                                ? "bg-green-500/20 border-green-500/30 text-green-300"
+                                                                : "bg-purple-500/20 hover:bg-purple-500/30 border-purple-500/30 text-purple-200"
+                                                        }`}
+                                                    >
+                                                        {savedEmbedding ? "Saved!" : "Save"}
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <div className="flex items-center justify-center py-8">
+                                            <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-purple-400"></div>
+                                        </div>
+                                    )}
                                 </div>
                             )}
                             {activeTab === "apiKeys" && (
