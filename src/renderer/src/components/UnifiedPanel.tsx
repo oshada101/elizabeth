@@ -55,8 +55,10 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
 
     // Streaming state
     const [streamingContent, setStreamingContent] = useState("");
+    const streamingContentRef = useRef("");
     const [activeTool, setActiveTool] = useState<{ name: string, input?: any } | null>(null);
     const [completedTools, setCompletedTools] = useState<{ name: string, output?: any }[]>([]);
+    const [preToolSegments, setPreToolSegments] = useState<string[]>([]);
 
     // Auto-scroll ref
     const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -139,13 +141,17 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
     useEffect(() => {
         // Setup chunk listener
         const removeChunkListener = window.electronAPI.onAgentChunk((chunk: string) => {
-            setStreamingContent(prev => prev + chunk);
+            streamingContentRef.current += chunk;
+            setStreamingContent(streamingContentRef.current);
         });
 
         const removeToolListener = window.electronAPI.onAgentTool((toolCall: any) => {
             if (toolCall.type === 'start') {
+                const captured = streamingContentRef.current;
+                streamingContentRef.current = "";
+                if (captured.trim()) setPreToolSegments(segs => [...segs, captured]);
+                setStreamingContent("");
                 setActiveTool({ name: toolCall.name, input: toolCall.input });
-                setStreamingContent(""); // Clear text when starting a tool to keep it clean
             } else if (toolCall.type === 'end') {
                 setCompletedTools(prev => [...prev, { name: toolCall.name, output: toolCall.output }]);
                 setActiveTool(null);
@@ -391,17 +397,22 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
                         await window.electronAPI.addMessage(sessionId, 'assistant', errorMsg);
                         setMessages(prev => [...prev, { role: "assistant", content: errorMsg }]);
                     }
+                    console.log(response)
+                    streamingContentRef.current = "";
                     setStreamingContent("");
                     setActiveTool(null);
                     setCompletedTools([]);
+                    setPreToolSegments([]);
                     setLoading(false);
                 }).catch(async (err) => {
                     const errorMsg = 'Error: ' + (err?.message || "Unknown error");
                     await window.electronAPI.addMessage(sessionId, 'assistant', errorMsg);
                     setMessages(prev => [...prev, { role: "assistant", content: errorMsg }]);
+                    streamingContentRef.current = "";
                     setStreamingContent("");
                     setActiveTool(null);
                     setCompletedTools([]);
+                    setPreToolSegments([]);
                     setLoading(false);
                 });
             }).catch(async (err) => {
@@ -847,8 +858,35 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
                 )}
 
                 {/* Streaming view */}
-                {(streamingContent || activeTool || completedTools.length > 0) && (
+                {(streamingContent || activeTool || completedTools.length > 0 || preToolSegments.length > 0) && (
                     <div className="flex flex-col gap-3">
+                        {preToolSegments.map((seg, idx) => (
+                            <div key={`pre-tool-${idx}`} className="flex justify-start">
+                                <div className="max-w-[85%] p-3 rounded-xl bg-white/5 text-purple-100">
+                                    <div className="text-sm prose prose-invert prose-sm max-w-none">
+                                        <ReactMarkdown
+                                            components={{
+                                                p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
+                                                ul: ({ children }) => <ul className="list-disc list-inside mb-2 space-y-1">{children}</ul>,
+                                                ol: ({ children }) => <ol className="list-decimal list-inside mb-2 space-y-1">{children}</ol>,
+                                                li: ({ children }) => <li className="text-purple-100">{children}</li>,
+                                                code: ({ children, className }) => {
+                                                    const isInline = !className;
+                                                    return isInline ? (
+                                                        <code className="bg-white/10 px-1.5 py-0.5 rounded text-purple-200 text-xs">{children}</code>
+                                                    ) : (
+                                                        <code className={`${className} block bg-primary-900/50 p-2 rounded-lg my-2 overflow-x-auto text-xs`}>{children}</code>
+                                                    );
+                                                },
+                                                pre: ({ children }) => <pre className="bg-primary-900/50 p-3 rounded-lg my-2 overflow-x-auto text-xs">{children}</pre>,
+                                            }}
+                                        >
+                                            {seg}
+                                        </ReactMarkdown>
+                                    </div>
+                                </div>
+                            </div>
+                        ))}
                         {completedTools.map((tool, idx) => (
                             <div key={`tool-done-${idx}`} className="flex justify-start">
                                 <div className="max-w-[85%] p-3 rounded-xl bg-yellow-500/10 border border-yellow-500/20">
