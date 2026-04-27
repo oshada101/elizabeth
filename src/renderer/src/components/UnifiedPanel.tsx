@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo, memo, useRef } from "react";
 import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import ChatInput from "./ChatInput";
 import DocumentRecommendations from "./DocumentRecommendations";
 
@@ -48,6 +49,36 @@ interface Session {
     created_at: string;
     updated_at: string;
 }
+
+const mdComponents = {
+    p: ({ children }: any) => <p className="mb-2 last:mb-0 text-sm leading-relaxed">{children}</p>,
+    ul: ({ children }: any) => <ul className="list-disc list-inside mb-2 space-y-1.5">{children}</ul>,
+    ol: ({ children }: any) => <ol className="list-decimal list-inside mb-2 space-y-1.5">{children}</ol>,
+    li: ({ children }: any) => <li className="text-purple-100 text-sm leading-relaxed">{children}</li>,
+    code: ({ children, className }: any) => {
+        const isInline = !className;
+        return isInline ? (
+            <code className="bg-white/10 px-1.5 py-0.5 rounded text-purple-200 text-xs">{children}</code>
+        ) : (
+            <code className={`${className} block bg-primary-900/50 p-2 rounded-lg my-2 overflow-x-auto text-xs`}>{children}</code>
+        );
+    },
+    pre: ({ children }: any) => <pre className="bg-primary-900/50 p-3 rounded-lg my-2 overflow-x-auto text-xs">{children}</pre>,
+    strong: ({ children }: any) => <strong className="text-purple-200 font-semibold">{children}</strong>,
+    em: ({ children }: any) => <em className="text-purple-300">{children}</em>,
+    a: ({ href, children }: any) => <a href={href} className="text-purple-300 hover:text-purple-200 underline" target="_blank" rel="noopener noreferrer">{children}</a>,
+    h1: ({ children }: any) => <h1 className="text-xl font-bold text-purple-100 mb-2 mt-3">{children}</h1>,
+    h2: ({ children }: any) => <h2 className="text-lg font-semibold text-purple-100 mb-1.5 mt-2">{children}</h2>,
+    h3: ({ children }: any) => <h3 className="text-base font-medium text-purple-100 mb-1 mt-2">{children}</h3>,
+    blockquote: ({ children }: any) => <blockquote className="border-l-2 border-purple-500/50 pl-3 italic text-purple-300 my-2">{children}</blockquote>,
+    hr: () => <hr className="border-white/10 my-3" />,
+    table: ({ children }: any) => <div className="overflow-x-auto my-3"><table className="w-full text-sm border-collapse">{children}</table></div>,
+    thead: ({ children }: any) => <thead className="bg-white/10">{children}</thead>,
+    tbody: ({ children }: any) => <tbody className="divide-y divide-white/10">{children}</tbody>,
+    tr: ({ children }: any) => <tr className="hover:bg-white/5">{children}</tr>,
+    th: ({ children }: any) => <th className="px-3 py-2 text-left text-xs font-semibold text-purple-200 uppercase tracking-wide">{children}</th>,
+    td: ({ children }: any) => <td className="px-3 py-2 text-sm text-purple-100">{children}</td>,
+};
 
 export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mode, sessionId, onBack, selectedText, onClearSelection, isEmbedding, embeddingProgress, onNewSession, onSessionChange, onDeleteSession, onRefreshFolder, onOpenDocument }: UnifiedPanelProps) {
     const [messages, setMessages] = useState<Message[]>([]);
@@ -813,32 +844,8 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
                                     <span className="text-sm text-yellow-200/90">{msg.content.replace('🔧 Tool: ', '')}</span>
                                 </div>
                             ) : msg.role === "assistant" ? (
-                                <div className="text-sm prose prose-invert prose-sm max-w-none">
-                                    <ReactMarkdown
-                                        components={{
-                                            p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
-                                            ul: ({ children }) => <ul className="list-disc list-inside mb-2 space-y-1">{children}</ul>,
-                                            ol: ({ children }) => <ol className="list-decimal list-inside mb-2 space-y-1">{children}</ol>,
-                                            li: ({ children }) => <li className="text-purple-100">{children}</li>,
-                                            code: ({ children, className }) => {
-                                                const isInline = !className;
-                                                return isInline ? (
-                                                    <code className="bg-white/10 px-1.5 py-0.5 rounded text-purple-200 text-xs">{children}</code>
-                                                ) : (
-                                                    <code className={`${className} block bg-primary-900/50 p-2 rounded-lg my-2 overflow-x-auto text-xs`}>{children}</code>
-                                                );
-                                            },
-                                            pre: ({ children }) => <pre className="bg-primary-900/50 p-3 rounded-lg my-2 overflow-x-auto text-xs">{children}</pre>,
-                                            strong: ({ children }) => <strong className="text-purple-200 font-semibold">{children}</strong>,
-                                            em: ({ children }) => <em className="text-purple-300">{children}</em>,
-                                            a: ({ href, children }) => <a href={href} className="text-purple-300 hover:text-purple-200 underline" target="_blank" rel="noopener noreferrer">{children}</a>,
-                                            h1: ({ children }) => <h1 className="text-xl font-bold text-purple-100 mb-2">{children}</h1>,
-                                            h2: ({ children }) => <h2 className="text-lg font-semibold text-purple-100 mb-1.5">{children}</h2>,
-                                            h3: ({ children }) => <h3 className="text-base font-medium text-purple-100 mb-1">{children}</h3>,
-                                            blockquote: ({ children }) => <blockquote className="border-l-2 border-purple-500/50 pl-3 italic text-purple-300 my-2">{children}</blockquote>,
-                                            hr: () => <hr className="border-white/10 my-3" />,
-                                        }}
-                                    >
+                                <div className="prose prose-invert max-w-none">
+                                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
                                         {msg.content}
                                     </ReactMarkdown>
                                 </div>
@@ -863,24 +870,8 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
                         {preToolSegments.map((seg, idx) => (
                             <div key={`pre-tool-${idx}`} className="flex justify-start">
                                 <div className="max-w-[85%] p-3 rounded-xl bg-white/5 text-purple-100">
-                                    <div className="text-sm prose prose-invert prose-sm max-w-none">
-                                        <ReactMarkdown
-                                            components={{
-                                                p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
-                                                ul: ({ children }) => <ul className="list-disc list-inside mb-2 space-y-1">{children}</ul>,
-                                                ol: ({ children }) => <ol className="list-decimal list-inside mb-2 space-y-1">{children}</ol>,
-                                                li: ({ children }) => <li className="text-purple-100">{children}</li>,
-                                                code: ({ children, className }) => {
-                                                    const isInline = !className;
-                                                    return isInline ? (
-                                                        <code className="bg-white/10 px-1.5 py-0.5 rounded text-purple-200 text-xs">{children}</code>
-                                                    ) : (
-                                                        <code className={`${className} block bg-primary-900/50 p-2 rounded-lg my-2 overflow-x-auto text-xs`}>{children}</code>
-                                                    );
-                                                },
-                                                pre: ({ children }) => <pre className="bg-primary-900/50 p-3 rounded-lg my-2 overflow-x-auto text-xs">{children}</pre>,
-                                            }}
-                                        >
+                                    <div className="prose prose-invert max-w-none">
+                                        <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
                                             {seg}
                                         </ReactMarkdown>
                                     </div>
@@ -918,24 +909,8 @@ export default function UnifiedPanel({ currentPath, onNavigate, onFileSelect, mo
                                     ) : null}
 
                                     {streamingContent && (
-                                        <div className="text-sm prose prose-invert prose-sm max-w-none">
-                                            <ReactMarkdown
-                                                components={{
-                                                    p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
-                                                    ul: ({ children }) => <ul className="list-disc list-inside mb-2 space-y-1">{children}</ul>,
-                                                    ol: ({ children }) => <ol className="list-decimal list-inside mb-2 space-y-1">{children}</ol>,
-                                                    li: ({ children }) => <li className="text-purple-100">{children}</li>,
-                                                    code: ({ children, className }) => {
-                                                        const isInline = !className;
-                                                        return isInline ? (
-                                                            <code className="bg-white/10 px-1.5 py-0.5 rounded text-purple-200 text-xs">{children}</code>
-                                                        ) : (
-                                                            <code className={`${className} block bg-primary-900/50 p-2 rounded-lg my-2 overflow-x-auto text-xs`}>{children}</code>
-                                                        );
-                                                    },
-                                                    pre: ({ children }) => <pre className="bg-primary-900/50 p-3 rounded-lg my-2 overflow-x-auto text-xs">{children}</pre>,
-                                                }}
-                                            >
+                                        <div className="prose prose-invert max-w-none">
+                                            <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
                                                 {streamingContent}
                                             </ReactMarkdown>
                                         </div>

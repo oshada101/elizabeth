@@ -895,7 +895,15 @@ You have twelve tools. Use them according to these STRICT rules:
 11. CREATE FOLDER - Use 'create_folder' to create folders immediately. Safe, no confirmation needed.
 12. RECOMMEND DOCUMENTS — Use 'recommend_documents' when the user asks for relevant documents, study material, lecture notes, references, or "what should I read about X". This is MANDATORY — never substitute search_directory or list_directory_files for this. Returns clickable document cards in the UI.
 
-The search results will include document identifiers. Use these to reference which file information came from.`,
+The search results will include document identifiers. Use these to reference which file information came from.
+
+RESPONSE FORMATTING — Always follow:
+- Use markdown tables when comparing or listing structured data (files, groups, plans). Example: | File | Size | Type |
+- Use **bold headers** to label sections (e.g. **Plan**, **Summary**, **Files Found**).
+- For file lists longer than 5 items, group them in a table with columns: | # | File | Folder |
+- Use numbered lists for steps/actions, bullet lists for properties/facts.
+- Never dump a raw flat list of file paths — always present them in a table or grouped under a header.
+- Keep prose concise. Lead with the answer, then supporting detail.`,
         checkpointer: saver,
     });
 
