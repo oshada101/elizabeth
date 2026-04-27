@@ -4,7 +4,11 @@ import { existsSync, readdirSync, statSync, readFileSync, writeFileSync, mkdirSy
 import { homedir } from 'os'
 import log from 'electron-log'
 import { db as appDb } from './db'
-import { invokeAgent, processPdfDocument, getEmbeddedDocuments, switchToDocument, getCurrentDocumentId, deleteEmbeddedDocument } from './agent'
+let _agent: typeof import('./agent') | null = null
+async function getAgent() {
+  if (!_agent) _agent = await import('./agent')
+  return _agent
+}
 import { updateDocumentPath, getDocumentsByPath } from './documentRegistry'
 import * as keyManager from './keyManager'
 
@@ -45,11 +49,16 @@ function createWindow(): void {
     frame: false,
     titleBarStyle: 'hidden',
     autoHideMenuBar: true,
+    show: false,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
       nodeIntegration: false
     }
+  })
+
+  mainWindow.once('ready-to-show', () => {
+    mainWindow?.show()
   })
 
   if (process.env.NODE_ENV === 'development') {
@@ -154,6 +163,7 @@ ipcMain.handle('delete-session', (_event, sessionId: number) => {
 })
 
 ipcMain.handle('ask', async (event, message: string, sessionId: number, currentPath: string) => {
+  const { invokeAgent } = await getAgent()
   const response = await invokeAgent(
     [{ role: 'user', content: message }],
     { configurable: { thread_id: `session_${sessionId}` } },
@@ -174,6 +184,7 @@ ipcMain.handle('load-pdf-text', async (event, pdfData: Uint8Array, filePath: str
     log.info("loading pdf")
 
     const fileName = filePath.split(/[\\/]/).pop() || 'document.pdf';
+    const { processPdfDocument } = await getAgent()
     const result = await processPdfDocument(pdfData, filePath, fileName, (progress: number) => {
       event.sender.send('embedding:progress', progress);
     });
@@ -235,6 +246,7 @@ ipcMain.handle('embed-directory-pdfs', async (event, dirPath: string) => {
 
       try {
         const pdfData = readFileSync(filePath)
+        const { processPdfDocument } = await getAgent()
         const result = await processPdfDocument(
           new Uint8Array(pdfData),
           filePath,
@@ -283,6 +295,7 @@ ipcMain.handle('embed-directory-pdfs', async (event, dirPath: string) => {
 // Get list of all embedded documents
 ipcMain.handle('documents:list', async () => {
   log.info('IPC: documents:list called')
+  const { getEmbeddedDocuments } = await getAgent()
   const docs = getEmbeddedDocuments()
   log.info(`IPC: returning ${docs.length} documents`)
   return docs
@@ -291,18 +304,21 @@ ipcMain.handle('documents:list', async () => {
 // Switch to a different document without re-embedding
 ipcMain.handle('documents:switch', async (_, hash: string) => {
   log.info('IPC: documents:switch called for', hash)
+  const { switchToDocument } = await getAgent()
   return switchToDocument(hash)
 })
 
 // Get current document hash
 ipcMain.handle('documents:current', async () => {
   log.info('IPC: documents:current called')
+  const { getCurrentDocumentId } = await getAgent()
   return getCurrentDocumentId()
 })
 
 // Delete a document
 ipcMain.handle('documents:delete', async (_, hash: string) => {
   log.info('IPC: documents:delete called for', hash)
+  const { deleteEmbeddedDocument } = await getAgent()
   return deleteEmbeddedDocument(hash)
 })
 
@@ -495,7 +511,8 @@ ipcMain.handle('fs:delete-files', async (_, files: string[]) => {
         const docs = getDocumentsByPath(filePath);
         for (const doc of docs) {
           if (doc.file_path === filePath) {
-            await deleteEmbeddedDocument(doc.id);
+            const { deleteEmbeddedDocument } = await getAgent()
+          await deleteEmbeddedDocument(doc.id);
           }
         }
       }

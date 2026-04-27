@@ -4,6 +4,7 @@ import TOCPanel from "./components/TOCPanel";
 import SettingsModal from "./components/SettingsModal";
 import FileExplorer from "./components/FileExplorer";
 import UnifiedPanel from "./components/UnifiedPanel";
+import LoadingScreen from "./components/LoadingScreen";
 import React from "react";
 import * as pdfjsLib from "pdfjs-dist";
 
@@ -81,6 +82,8 @@ function getTabLabel(tab: TabState): string {
 const initialTab = makeTab("");
 
 function App() {
+    const [initsDone, setInitsDone] = useState(0);
+    const [minTimeDone, setMinTimeDone] = useState(false);
     const [defaultDir, setDefaultDir] = useState("");
     const [tabs, setTabs] = useState<TabState[]>([initialTab]);
     const [activeTabId, setActiveTabId] = useState<string>(initialTab.id);
@@ -126,11 +129,17 @@ function App() {
     );
 
     useEffect(() => {
+        const t = setTimeout(() => setMinTimeDone(true), 600);
+        return () => clearTimeout(t);
+    }, []);
+
+    useEffect(() => {
         window.electronAPI.fs.getDefaultDir().then((dir: string) => {
             setDefaultDir(dir);
             setTabs((prev) =>
                 prev.map((t) => (t.id === initialTab.id ? { ...t, currentPath: dir } : t))
             );
+            setInitsDone((n) => n + 1);
         });
     }, []);
 
@@ -140,13 +149,16 @@ function App() {
                 const sessions = await window.electronAPI.getSessions();
                 if (sessions.length > 0) {
                     setSessionId(sessions[0].id);
+                    setInitsDone((n) => n + 1);
                 } else {
                     const newId = await window.electronAPI.createSession("");
                     setSessionId(newId);
+                    setInitsDone((n) => n + 1);
                 }
             } catch {
                 const newId = await window.electronAPI.createSession("");
                 setSessionId(newId);
+                setInitsDone((n) => n + 1);
             }
         };
         init();
@@ -184,8 +196,10 @@ function App() {
             setDocuments(docs);
             const current = await window.electronAPI.documents.current();
             setCurrentDocId(current);
+            setInitsDone((n) => n + 1);
         } catch (e) {
             console.error("Failed to load documents:", e);
+            setInitsDone((n) => n + 1);
         }
     };
 
@@ -403,6 +417,12 @@ function App() {
             action: () => window.electronAPI.windowClose(),
         },
     ];
+
+    const appReady = initsDone >= 3 && minTimeDone;
+
+    if (!appReady) {
+        return <LoadingScreen progress={(initsDone / 3) * 100} />;
+    }
 
     return (
         <div className="h-screen flex flex-col">

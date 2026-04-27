@@ -7,6 +7,21 @@
   "description": "PDF Viewer with Chatbot",
   
   "main": "./out/main/index.js",
+
+  "build": {
+    "appId": "com.elizabeth.app",
+    "productName": "Elizabeth",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "out/**/*",
+      "node_modules/**/*"
+    ],
+    "linux": {
+      "target": "AppImage"
+    }
+  },
   
   "author": "",
   
@@ -27,7 +42,10 @@
   "postinstall": "electron-builder install-app-deps",
   
     
-  "start": "electron-vite preview"
+  "start": "electron-vite preview",
+
+
+  "package": "electron-vite build && electron-builder --linux"
   
   },
   
