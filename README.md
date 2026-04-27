@@ -2,8 +2,7 @@
 
 Electron desktop app for viewing documents and chatting with an AI assistant about their contents.
 
-![Platform](https://img.shields.io/badge/platform-Linux-blue) ![License](https://img.shields.io/badge/license-ISC-green)
-
+![Platform](https://img.shields.io/badge/platform-Linux-blue) 
 ## Features
 
 - **Document viewing** — PDF, DOCX, spreadsheets, Markdown with virtual scrolling and text selection
@@ -97,7 +96,6 @@ Renderer (React 18 + TypeScript + Tailwind)
 | `move_files` | Move files to new locations | Yes |
 | `rename_file` | Rename a file or folder | Yes |
 | `delete_files` | Delete files or folders | Yes |
-| `create_folder` | Create a new folder | No |
 | `convert_document` | Convert PPTX to PDF | Yes |
 
 ## Styling
