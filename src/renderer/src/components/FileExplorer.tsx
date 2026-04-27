@@ -33,25 +33,17 @@ export default function FileExplorer({ onFileClick, onNavigate, currentPath, onE
     const [removingAll, setRemovingAll] = useState(false);
 
     const loadEmbedded = useCallback(async () => {
+        if (!currentPath) return;
         try {
-            const docs = await window.electronAPI.documents.list();
+            const docs = await window.electronAPI.documents.listByDirectory(currentPath);
             const map = new Map<string, string>();
             docs.forEach((doc: { id: string; file_path: string }) => {
                 map.set(doc.file_path, doc.id);
             });
             setEmbeddedMap(map);
+            setAllEmbedded(docs.length > 0);
         } catch (error) {
             console.error("Error loading embedded docs:", error);
-        }
-    }, []);
-
-    const checkAllEmbedded = useCallback(async () => {
-        if (!currentPath) return;
-        try {
-            const embeddedCount = await window.electronAPI.documents.countByPath(currentPath);
-            setAllEmbedded(embeddedCount > 0);
-        } catch (error) {
-            console.error("Error checking embedded status:", error);
         }
     }, [currentPath]);
 
@@ -61,13 +53,12 @@ export default function FileExplorer({ onFileClick, onNavigate, currentPath, onE
             setRemovingAll(true);
             await window.electronAPI.documents.deleteByPath(currentPath);
             await loadEmbedded();
-            checkAllEmbedded();
         } catch (error) {
             console.error("Error removing all embedded docs:", error);
         } finally {
             setRemovingAll(false);
         }
-    }, [currentPath, removingAll, loadEmbedded, checkAllEmbedded]);
+    }, [currentPath, removingAll, loadEmbedded]);
 
     useEffect(() => {
         if (!currentPath) {
@@ -81,7 +72,6 @@ export default function FileExplorer({ onFileClick, onNavigate, currentPath, onE
                 if (entries) {
                     setFiles(entries);
                     await loadEmbedded();
-                    await checkAllEmbedded();
                 }
             } catch (error) {
                 console.error("Error loading directory:", error);
@@ -90,7 +80,7 @@ export default function FileExplorer({ onFileClick, onNavigate, currentPath, onE
             }
         };
         loadDirectory();
-    }, [currentPath, refreshKey, loadEmbedded, checkAllEmbedded]);
+    }, [currentPath, refreshKey, loadEmbedded]);
 
     useEffect(() => {
         if (currentPath) {

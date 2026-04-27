@@ -109,6 +109,7 @@ const api = {
         delete: (hash: string): Promise<boolean> => ipcRenderer.invoke("documents:delete", hash),
         countByPath: (dirPath: string): Promise<number> => ipcRenderer.invoke("documents:countByPath", dirPath),
         deleteByPath: (dirPath: string): Promise<number> => ipcRenderer.invoke("documents:deleteByPath", dirPath),
+        listByDirectory: (dirPath: string): Promise<DocumentInfo[]> => ipcRenderer.invoke("documents:listByDirectory", dirPath),
     },
     fs: {
         getHomeDir: (): Promise<string> => ipcRenderer.invoke("fs:get-home-dir"),

@@ -22,6 +22,7 @@ interface DocumentsApi {
     delete: (hash: string) => Promise<boolean>;
     countByPath: (dirPath: string) => Promise<number>;
     deleteByPath: (dirPath: string) => Promise<number>;
+    listByDirectory: (dirPath: string) => Promise<DocumentInfo[]>;
 }
 
 interface ApiKeysApi {

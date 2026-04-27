@@ -347,6 +347,13 @@ ipcMain.handle('documents:deleteByPath', async (_, dirPath: string) => {
   return deletedCount
 })
 
+// Get list of embedded documents in a directory path (including subdirectories)
+ipcMain.handle('documents:listByDirectory', async (_, dirPath: string) => {
+  log.info('IPC: documents:listByDirectory called for', dirPath)
+  const docs = getDocumentsByPath(dirPath)
+  return docs
+})
+
 ipcMain.handle('api-keys:list', async () => {
   return keyManager.getApiKeysMetadata()
 })
