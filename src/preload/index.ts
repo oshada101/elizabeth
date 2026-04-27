@@ -107,6 +107,8 @@ const api = {
         switch: (hash: string): Promise<boolean> => ipcRenderer.invoke("documents:switch", hash),
         current: (): Promise<string | null> => ipcRenderer.invoke("documents:current"),
         delete: (hash: string): Promise<boolean> => ipcRenderer.invoke("documents:delete", hash),
+        countByPath: (dirPath: string): Promise<number> => ipcRenderer.invoke("documents:countByPath", dirPath),
+        deleteByPath: (dirPath: string): Promise<number> => ipcRenderer.invoke("documents:deleteByPath", dirPath),
     },
     fs: {
         getHomeDir: (): Promise<string> => ipcRenderer.invoke("fs:get-home-dir"),

@@ -323,6 +323,30 @@ ipcMain.handle('documents:delete', async (_, hash: string) => {
   return deleteEmbeddedDocument(hash)
 })
 
+// Get count of documents in a directory path (including subdirectories)
+ipcMain.handle('documents:countByPath', async (_, dirPath: string) => {
+  log.info('IPC: documents:countByPath called for', dirPath)
+  const docs = getDocumentsByPath(dirPath)
+  return docs.length
+})
+
+// Delete all documents in a directory path (including subdirectories)
+ipcMain.handle('documents:deleteByPath', async (_, dirPath: string) => {
+  log.info('IPC: documents:deleteByPath called for', dirPath)
+  const docs = getDocumentsByPath(dirPath)
+  const { deleteEmbeddedDocument } = await getAgent()
+  let deletedCount = 0
+  for (const doc of docs) {
+    try {
+      await deleteEmbeddedDocument(doc.id)
+      deletedCount++
+    } catch (error) {
+      log.error(`Error deleting document ${doc.id}:`, error)
+    }
+  }
+  return deletedCount
+})
+
 ipcMain.handle('api-keys:list', async () => {
   return keyManager.getApiKeysMetadata()
 })

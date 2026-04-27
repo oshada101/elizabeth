@@ -29,6 +29,8 @@ export default function FileExplorer({ onFileClick, onNavigate, currentPath, onE
     const [viewMode, setViewMode] = useState<"list" | "grid">("list");
     const [breadcrumbs, setBreadcrumbs] = useState<string[]>([]);
     const [embeddedMap, setEmbeddedMap] = useState<Map<string, string>>(new Map());
+    const [allEmbedded, setAllEmbedded] = useState(false);
+    const [removingAll, setRemovingAll] = useState(false);
 
     const loadEmbedded = useCallback(async () => {
         try {
@@ -43,6 +45,30 @@ export default function FileExplorer({ onFileClick, onNavigate, currentPath, onE
         }
     }, []);
 
+    const checkAllEmbedded = useCallback(async () => {
+        if (!currentPath) return;
+        try {
+            const embeddedCount = await window.electronAPI.documents.countByPath(currentPath);
+            setAllEmbedded(embeddedCount > 0);
+        } catch (error) {
+            console.error("Error checking embedded status:", error);
+        }
+    }, [currentPath]);
+
+    const handleRemoveAll = useCallback(async () => {
+        if (!currentPath || removingAll) return;
+        try {
+            setRemovingAll(true);
+            await window.electronAPI.documents.deleteByPath(currentPath);
+            await loadEmbedded();
+            checkAllEmbedded();
+        } catch (error) {
+            console.error("Error removing all embedded docs:", error);
+        } finally {
+            setRemovingAll(false);
+        }
+    }, [currentPath, removingAll, loadEmbedded, checkAllEmbedded]);
+
     useEffect(() => {
         if (!currentPath) {
             setLoading(true);
@@ -55,6 +81,7 @@ export default function FileExplorer({ onFileClick, onNavigate, currentPath, onE
                 if (entries) {
                     setFiles(entries);
                     await loadEmbedded();
+                    await checkAllEmbedded();
                 }
             } catch (error) {
                 console.error("Error loading directory:", error);
@@ -63,7 +90,7 @@ export default function FileExplorer({ onFileClick, onNavigate, currentPath, onE
             }
         };
         loadDirectory();
-    }, [currentPath, refreshKey, loadEmbedded]);
+    }, [currentPath, refreshKey, loadEmbedded, checkAllEmbedded]);
 
     useEffect(() => {
         if (currentPath) {
@@ -166,17 +193,31 @@ export default function FileExplorer({ onFileClick, onNavigate, currentPath, onE
                     ))}
                 </div>
                 <div className="ml-auto flex items-center gap-1 flex-shrink-0">
-                    <button
-                        onClick={onEmbedAll}
-                        disabled={batchEmbedding}
-                        className={`p-2 rounded-lg transition-colors flex items-center gap-2 text-sm ${batchEmbedding ? "bg-purple-500/20 text-purple-300 opacity-50 cursor-not-allowed" : "hover:bg-purple-500/20 text-purple-300 hover:text-purple-200"}`}
-                        title="Embed all PDFs in this directory"
-                    >
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2" />
-                        </svg>
-                        <span className="hidden sm:inline">{batchEmbedding ? "Embedding..." : "Embed All"}</span>
-                    </button>
+                    {allEmbedded ? (
+                        <button
+                            onClick={handleRemoveAll}
+                            disabled={removingAll}
+                            className="p-2 rounded-lg transition-colors flex items-center gap-2 text-sm hover:bg-red-500/20 text-red-400"
+                            title="Remove all from vector store"
+                        >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                            </svg>
+                            <span className="hidden sm:inline">{removingAll ? "Removing..." : "Remove All"}</span>
+                        </button>
+                    ) : (
+                        <button
+                            onClick={onEmbedAll}
+                            disabled={batchEmbedding}
+                            className={`p-2 rounded-lg transition-colors flex items-center gap-2 text-sm ${batchEmbedding ? "bg-purple-500/20 text-purple-300 opacity-50 cursor-not-allowed" : "hover:bg-purple-500/20 text-purple-300 hover:text-purple-200"}`}
+                            title="Embed all PDFs in this directory"
+                        >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2" />
+                            </svg>
+                            <span className="hidden sm:inline">{batchEmbedding ? "Embedding..." : "Embed All"}</span>
+                        </button>
+                    )}
                     <div className="w-px h-5 bg-white/10 mx-1"></div>
                     <button
                         onClick={() => setViewMode(viewMode === "list" ? "grid" : "list")}

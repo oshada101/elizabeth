@@ -20,6 +20,8 @@ interface DocumentsApi {
     switch: (hash: string) => Promise<boolean>;
     current: () => Promise<string | null>;
     delete: (hash: string) => Promise<boolean>;
+    countByPath: (dirPath: string) => Promise<number>;
+    deleteByPath: (dirPath: string) => Promise<number>;
 }
 
 interface ApiKeysApi {
