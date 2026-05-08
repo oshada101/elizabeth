@@ -2,7 +2,10 @@
 
 Electron desktop app for viewing documents and chatting with an AI assistant about their contents.
 
-![Platform](https://img.shields.io/badge/platform-Linux-blue) 
+![Platform](https://img.shields.io/badge/platform-Linux-blue)
+
+**Project page:** https://oshada.dev/projects/elizabeth
+
 ## Features
 
 - **Document viewing** — PDF, DOCX, spreadsheets, Markdown with virtual scrolling and text selection
